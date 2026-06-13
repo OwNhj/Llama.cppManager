@@ -1,7 +1,7 @@
 use eframe::egui;
 use llama_core::huggingface::{HfClient, HfModel};
 use llama_core::network::NetworkStatus;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
 pub struct HfView {
     search_query: String,
@@ -13,7 +13,7 @@ pub struct HfView {
     hf_client: Arc<Mutex<HfClient>>,
     mirror_url: String,
     status_message: String,
-    is_searching: Arc<Mutex<bool>>,
+    is_searching: Arc<AtomicBool>,
     search_rx: Option<std::sync::mpsc::Receiver<SearchResult>>,
 }
 
@@ -40,7 +40,7 @@ impl HfView {
             hf_client: Arc::new(Mutex::new(HfClient::new("https://huggingface.co".into()))),
             mirror_url: "https://hf-mirror.com".into(),
             status_message: String::new(),
-            is_searching: Arc::new(Mutex::new(false)),
+            is_searching: Arc::new(AtomicBool::new(false)),
             search_rx: None,
         }
     }
@@ -75,19 +75,22 @@ impl HfView {
             if let Ok(result) = rx.try_recv() {
                 match result {
                     SearchResult::Success(results) => {
+                        let count = results.len();
                         self.search_results = results;
-                        self.status_message = format!("找到 {} 个模型", self.search_results.len());
-                        *self.is_searching.lock().unwrap() = false;
+                        self.status_message = format!("找到 {} 个模型", count);
+                        self.is_searching.store(false, Ordering::SeqCst);
                     }
                     SearchResult::Error(e) => {
                         self.status_message = format!("搜索失败: {}", e);
-                        *self.is_searching.lock().unwrap() = false;
+                        self.is_searching.store(false, Ordering::SeqCst);
                     }
                 }
             } else {
                 self.search_rx = Some(rx);
             }
         }
+
+        let searching = self.is_searching.load(Ordering::SeqCst);
 
         // Network status section
         ui.separator();
@@ -110,26 +113,39 @@ impl HfView {
                     ui.label("● 未检测");
                 }
             }
-            if ui.button("检测网络").clicked() {
-                self.network_status = Some(NetworkStatus::Online { latency_ms: 50 });
-                self.status_message = "网络检测完成".into();
+            if !searching {
+                if ui.button("检测网络").clicked() {
+                    self.network_status = Some(NetworkStatus::Online { latency_ms: 50 });
+                    self.status_message = "网络检测完成".into();
+                }
             }
         });
 
-        // Mirror site selection
+        // Mirror site selection - 禁用搜索期间的切换
         ui.horizontal(|ui| {
             ui.label("镜像站:");
-            ui.text_edit_singleline(&mut self.mirror_url);
-            if ui.button("切换").clicked() {
+            ui.add_enabled(!searching, egui::TextEdit::singleline(&mut self.mirror_url));
+            
+            let switch_enabled = !searching;
+            if ui.add_enabled(switch_enabled, egui::Button::new("切换")).clicked() {
+                let url = self.mirror_url.clone();
                 let mut client = self.hf_client.lock().unwrap();
-                *client = HfClient::new(self.mirror_url.clone());
-                self.status_message = format!("已切换到: {}", self.mirror_url);
+                *client = HfClient::new(url.clone());
+                self.status_message = format!("已切换到: {}", url);
             }
-            if ui.button("官方").clicked() {
+            if ui.add_enabled(switch_enabled, egui::Button::new("官方")).clicked() {
+                let url = "https://huggingface.co".to_string();
+                self.mirror_url = url.clone();
                 let mut client = self.hf_client.lock().unwrap();
-                *client = HfClient::new("https://huggingface.co".into());
-                self.mirror_url = "https://huggingface.co".into();
+                *client = HfClient::new(url);
                 self.status_message = "已切换到HuggingFace官方".into();
+            }
+            if ui.add_enabled(switch_enabled, egui::Button::new("hf-mirror")).clicked() {
+                let url = "https://hf-mirror.com".to_string();
+                self.mirror_url = url.clone();
+                let mut client = self.hf_client.lock().unwrap();
+                *client = HfClient::new(url);
+                self.status_message = "已切换到hf-mirror.com".into();
             }
         });
 
@@ -138,16 +154,17 @@ impl HfView {
         // Search section
         ui.strong("搜索模型");
         ui.horizontal(|ui| {
-            let response = ui.text_edit_singleline(&mut self.search_query);
+            let response = ui.add_enabled(!searching, 
+                egui::TextEdit::singleline(&mut self.search_query));
             
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if !self.search_query.is_empty() && !*self.is_searching.lock().unwrap() {
+                if !self.search_query.is_empty() && !searching {
                     self.do_search();
                 }
             }
             
-            let searching = *self.is_searching.lock().unwrap();
-            if ui.add_enabled(!searching && !self.search_query.is_empty(), egui::Button::new("搜索")).clicked() {
+            if ui.add_enabled(!searching && !self.search_query.is_empty(), 
+                egui::Button::new("搜索")).clicked() {
                 self.do_search();
             }
             
@@ -156,6 +173,9 @@ impl HfView {
                 ui.label("搜索中...");
             }
         });
+
+        // 当前使用的API地址
+        ui.small(format!("当前API: {}/api/models", self.hf_client.lock().unwrap().base_url()));
 
         // Search results
         if !self.search_results.is_empty() {
@@ -169,7 +189,7 @@ impl HfView {
             });
 
             egui::ScrollArea::vertical()
-                .max_height(250.0)
+                .max_height(200.0)
                 .show(ui, |ui| {
                     for model in &self.search_results {
                         let is_selected = self
@@ -265,7 +285,7 @@ impl HfView {
     }
 
     fn do_search(&mut self) {
-        *self.is_searching.lock().unwrap() = true;
+        self.is_searching.store(true, Ordering::SeqCst);
         self.status_message = format!("搜索中: {}...", self.search_query);
         
         let client = self.hf_client.clone();
