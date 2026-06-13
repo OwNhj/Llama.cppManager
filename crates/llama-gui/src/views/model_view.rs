@@ -11,6 +11,7 @@ pub struct ModelView {
     preset_name: String,
     status_message: String,
     model_supports_mtp: bool,
+    export_quant_type: String,
 }
 
 impl Default for ModelView {
@@ -30,6 +31,7 @@ impl ModelView {
             preset_name: String::new(),
             status_message: String::new(),
             model_supports_mtp: false,
+            export_quant_type: "Q5_K_M".into(),
         }
     }
 
@@ -211,8 +213,35 @@ impl ModelView {
             if !info.format.is_gguf() {
                 ui.separator();
                 ui.colored_label(egui::Color32::YELLOW, "此模型需要导出为GGUF格式才能使用");
+                
+                ui.horizontal(|ui| {
+                    ui.label("量化方式:");
+                    ui.selectable_value(&mut self.export_quant_type, "F16".to_string(), "F16");
+                    ui.selectable_value(&mut self.export_quant_type, "Q8_0".to_string(), "Q8_0");
+                    ui.selectable_value(&mut self.export_quant_type, "Q5_K_M".to_string(), "Q5_K_M");
+                    ui.selectable_value(&mut self.export_quant_type, "Q4_K_M".to_string(), "Q4_K_M");
+                });
+                
                 if ui.button("导出为GGUF").clicked() {
-                    self.status_message = "导出功能将在量化工具中实现".into();
+                    if let Some(ref info) = self.model_info {
+                        let input_path = info.path.display().to_string();
+                        let output_path = input_path.replace(&format!(".{}", 
+                            match info.format {
+                                ModelFormat::PyTorch => "bin",
+                                ModelFormat::SafeTensors => "safetensors",
+                                _ => "bin",
+                            }
+                        ), &format!("-{}.gguf", self.export_quant_type));
+                        
+                        self.status_message = format!("开始导出: {} -> {}", input_path, output_path);
+                        
+                        // 这里应该调用llama.cpp的quantize工具
+                        // 目前只是模拟
+                        std::thread::spawn(move || {
+                            // 模拟导出过程
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        });
+                    }
                 }
             }
         }

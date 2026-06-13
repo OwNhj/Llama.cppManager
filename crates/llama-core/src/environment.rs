@@ -158,6 +158,21 @@ pub struct OffloadRecommendation {
     pub reason: String,
 }
 
+/// llama.cpp 信息
+#[derive(Debug, Clone)]
+pub struct LlamaCppInfo {
+    /// 是否已安装
+    pub installed: bool,
+    /// llama-server 路径
+    pub server_path: Option<String>,
+    /// llama-cli 路径
+    pub cli_path: Option<String>,
+    /// quantize 路径
+    pub quantize_path: Option<String>,
+    /// 版本
+    pub version: Option<String>,
+}
+
 /// Detected system environment (CPU, GPU, NPU, Runtime).
 #[derive(Debug, Clone)]
 pub struct Environment {
@@ -167,6 +182,7 @@ pub struct Environment {
     pub runtime: RuntimeEnvironment,
     pub os: OsInfo,
     pub rust_toolchain: String,
+    pub llama_cpp: LlamaCppInfo,
 }
 
 /// Operating system information.
@@ -185,6 +201,7 @@ impl Environment {
         let runtime = Self::detect_runtime();
         let os = Self::detect_os();
         let rust_toolchain = Self::detect_rust_toolchain();
+        let llama_cpp = Self::detect_llama_cpp();
         Self {
             cpu,
             gpus,
@@ -192,6 +209,59 @@ impl Environment {
             runtime,
             os,
             rust_toolchain,
+            llama_cpp,
+        }
+    }
+
+    /// 检测 llama.cpp 安装情况
+    fn detect_llama_cpp() -> LlamaCppInfo {
+        let mut server_path = None;
+        let mut cli_path = None;
+        let mut quantize_path = None;
+        let mut version = None;
+
+        // 检测 llama-server
+        if let Ok(output) = std::process::Command::new("llama-server").arg("--version").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            server_path = Some("llama-server".into());
+            version = stdout.lines().next().map(|l| l.trim().to_string());
+        }
+
+        // 检测 llama-cli
+        if let Ok(_) = std::process::Command::new("llama-cli").arg("--version").output() {
+            cli_path = Some("llama-cli".into());
+        }
+
+        // 检测 quantize
+        if let Ok(_) = std::process::Command::new("quantize").arg("--help").output() {
+            quantize_path = Some("quantize".into());
+        }
+
+        // 如果没有找到标准命令，检查常见路径
+        if server_path.is_none() {
+            let common_paths = [
+                "C:\\llama.cpp\\bin\\llama-server.exe",
+                "C:\\Program Files\\llama.cpp\\bin\\llama-server.exe",
+                "/usr/local/bin/llama-server",
+                "/usr/bin/llama-server",
+            ];
+            
+            for path in &common_paths {
+                if std::path::Path::new(path).exists() {
+                    server_path = Some(path.to_string());
+                    break;
+                }
+            }
+        }
+
+        let installed = server_path.is_some() || cli_path.is_some() || quantize_path.is_some();
+
+        LlamaCppInfo {
+            installed,
+            server_path,
+            cli_path,
+            quantize_path,
+            version,
         }
     }
 

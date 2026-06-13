@@ -103,6 +103,29 @@ impl EnvView {
                     });
                 }
             }
+
+            // llama.cpp 信息
+            ui.separator();
+            ui.strong("llama.cpp");
+            let llama = &env.llama_cpp;
+            if llama.installed {
+                ui.colored_label(egui::Color32::GREEN, "● 已安装");
+                if let Some(ref v) = llama.version {
+                    ui.label(format!("版本: {}", v));
+                }
+                if let Some(ref p) = llama.server_path {
+                    ui.label(format!("server: {}", p));
+                }
+                if let Some(ref p) = llama.cli_path {
+                    ui.label(format!("cli: {}", p));
+                }
+                if let Some(ref p) = llama.quantize_path {
+                    ui.label(format!("quantize: {}", p));
+                }
+            } else {
+                ui.colored_label(egui::Color32::YELLOW, "● 未检测到");
+                ui.label("请安装 llama.cpp 或将其添加到 PATH");
+            }
         } else {
             ui.separator();
             ui.label("点击\"刷新检测\"按钮检测系统环境");
