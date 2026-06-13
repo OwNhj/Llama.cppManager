@@ -31,6 +31,21 @@ impl ModelView {
         }
     }
 
+    /// 获取当前选中模型的名称
+    pub fn current_model_name(&self) -> Option<String> {
+        self.model_info.as_ref().map(|m| m.name.clone())
+    }
+
+    /// 获取当前选中模型的路径
+    pub fn current_model_path(&self) -> Option<String> {
+        self.selected_path.clone()
+    }
+
+    /// 获取当前模型的参数
+    pub fn current_params(&self) -> &ModelParams {
+        &self.params
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("模型管理");
 

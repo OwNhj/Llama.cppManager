@@ -17,6 +17,7 @@ pub struct App {
     quantize_view: quantize_view::QuantizeView,
     offload_view: offload_view::OffloadView,
     settings_view: settings_view::SettingsView,
+    last_model_path: Option<String>,
 }
 
 struct HomeView {
@@ -45,6 +46,7 @@ impl App {
             quantize_view: quantize_view::QuantizeView::new(),
             offload_view: offload_view::OffloadView::new(),
             settings_view: settings_view::SettingsView::new(),
+            last_model_path: None,
         }
     }
 }
@@ -110,6 +112,17 @@ impl eframe::App for App {
                     columns[1].separator();
                     self.home_view.env_view.show(&mut columns[1]);
                 });
+
+                // 检查模型是否变更，更新offload视图
+                let current_path = self.home_view.model_view.current_model_path();
+                if current_path != self.last_model_path {
+                    if let Some(ref name) = self.home_view.model_view.current_model_name() {
+                        self.offload_view.set_model_info(name, 32); // 默认32层，实际应从模型元数据读取
+                    } else {
+                        self.offload_view.clear_model_info();
+                    }
+                    self.last_model_path = current_path;
+                }
             }
             Tab::HuggingFace => self.hf_view.show(ui),
             Tab::Quantize => self.quantize_view.show(ui),

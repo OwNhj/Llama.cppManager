@@ -5,6 +5,7 @@ use llama_server::offload::{CommProtocol, OffloadConfig, OffloadMode};
 pub struct OffloadView {
     config: OffloadConfig,
     total_layers: u32,
+    model_name: Option<String>,
 }
 
 impl Default for OffloadView {
@@ -18,18 +19,23 @@ impl OffloadView {
         Self {
             config: OffloadConfig::default(),
             total_layers: 32,
+            model_name: None,
         }
     }
 
-    pub fn with_total_layers(total_layers: u32) -> Self {
-        Self {
-            config: OffloadConfig::default(),
-            total_layers,
-        }
+    /// 设置模型信息（从模型管理页面传递）
+    pub fn set_model_info(&mut self, name: &str, total_layers: u32) {
+        self.model_name = Some(name.to_string());
+        self.total_layers = total_layers;
+        // 重置配置
+        self.config = OffloadConfig::default();
     }
 
-    pub fn set_total_layers(&mut self, layers: u32) {
-        self.total_layers = layers;
+    /// 清除模型信息
+    pub fn clear_model_info(&mut self) {
+        self.model_name = None;
+        self.total_layers = 32;
+        self.config = OffloadConfig::default();
     }
 
     pub fn total_layers(&self) -> u32 {
@@ -38,6 +44,20 @@ impl OffloadView {
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("Offload 配置");
+
+        // 显示当前模型信息
+        if let Some(ref name) = self.model_name {
+            ui.horizontal(|ui| {
+                ui.label("当前模型:");
+                ui.strong(name);
+                ui.separator();
+                ui.label(format!("总层数: {}", self.total_layers));
+            });
+        } else {
+            ui.label("请先在首页选择模型");
+        }
+
+        ui.separator();
 
         ui.label("分离模式:");
         ui.horizontal(|ui| {
@@ -112,39 +132,41 @@ impl OffloadView {
 
             ui.separator();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for i in 0..self.total_layers {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("Layer {}: ", i));
-                        let current_device = self
-                            .config
-                            .layers
-                            .iter()
-                            .find(|l| l.layer_index == i)
-                            .map(|l| l.device.clone())
-                            .unwrap_or(DeviceType::Cpu);
+            egui::ScrollArea::vertical()
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    for i in 0..self.total_layers {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Layer {}: ", i));
+                            let current_device = self
+                                .config
+                                .layers
+                                .iter()
+                                .find(|l| l.layer_index == i)
+                                .map(|l| l.device.clone())
+                                .unwrap_or(DeviceType::Cpu);
 
-                        if ui
-                            .selectable_label(current_device == DeviceType::Cpu, "CPU")
-                            .clicked()
-                        {
-                            self.set_layer_device(i, DeviceType::Cpu);
-                        }
-                        if ui
-                            .selectable_label(current_device == DeviceType::Cuda(0), "CUDA:0")
-                            .clicked()
-                        {
-                            self.set_layer_device(i, DeviceType::Cuda(0));
-                        }
-                        if ui
-                            .selectable_label(current_device == DeviceType::Cuda(1), "CUDA:1")
-                            .clicked()
-                        {
-                            self.set_layer_device(i, DeviceType::Cuda(1));
-                        }
-                    });
-                }
-            });
+                            if ui
+                                .selectable_label(current_device == DeviceType::Cpu, "CPU")
+                                .clicked()
+                            {
+                                self.set_layer_device(i, DeviceType::Cpu);
+                            }
+                            if ui
+                                .selectable_label(current_device == DeviceType::Cuda(0), "CUDA:0")
+                                .clicked()
+                            {
+                                self.set_layer_device(i, DeviceType::Cuda(0));
+                            }
+                            if ui
+                                .selectable_label(current_device == DeviceType::Cuda(1), "CUDA:1")
+                                .clicked()
+                            {
+                                self.set_layer_device(i, DeviceType::Cuda(1));
+                            }
+                        });
+                    }
+                });
         }
 
         ui.separator();
@@ -196,7 +218,7 @@ impl OffloadView {
     }
 
     fn show_vram_stats(&self, ui: &mut egui::Ui) {
-        ui.label("显存占用统计");
+        ui.strong("显存占用统计");
 
         let gpu_layers: Vec<_> = self
             .config

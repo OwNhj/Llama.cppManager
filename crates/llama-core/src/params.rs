@@ -10,6 +10,11 @@ pub struct ModelParams {
     pub batch_size: u32,
     pub gpu_offload_layers: u32,
     pub flash_attention: bool,
+    // MTP (Multi-Token Prediction) 参数
+    pub mtp_enabled: bool,
+    pub mtp_n_predict: u32,
+    pub mtp_n_vocab: u32,
+    pub mtp_n_embd: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +39,10 @@ impl Default for ModelParams {
             batch_size: 512,
             gpu_offload_layers: 32,
             flash_attention: true,
+            mtp_enabled: false,
+            mtp_n_predict: 1,
+            mtp_n_vocab: 32000,
+            mtp_n_embd: 4096,
         }
     }
 }
@@ -113,6 +122,33 @@ impl ModelParams {
                 default: 1.0,
                 description: "Flash Attention加速",
             },
+            ParamMeta {
+                name: "mtp_n_predict",
+                display_name: "MTP N Predict",
+                min: Some(1.0),
+                max: Some(8.0),
+                step: Some(1.0),
+                default: 1.0,
+                description: "MTP每次预测的token数",
+            },
+            ParamMeta {
+                name: "mtp_n_vocab",
+                display_name: "MTP Vocab Size",
+                min: Some(1000.0),
+                max: Some(256000.0),
+                step: Some(1000.0),
+                default: 32000.0,
+                description: "MTP词表大小",
+            },
+            ParamMeta {
+                name: "mtp_n_embd",
+                display_name: "MTP Embedding",
+                min: Some(256.0),
+                max: Some(16384.0),
+                step: Some(256.0),
+                default: 4096.0,
+                description: "MTP嵌入维度",
+            },
         ]
     }
 
@@ -137,6 +173,17 @@ impl ModelParams {
         }
         if self.gpu_offload_layers > 128 {
             anyhow::bail!("GPU Offload Layers must be in [0, 128]");
+        }
+        if self.mtp_enabled {
+            if self.mtp_n_predict < 1 || self.mtp_n_predict > 8 {
+                anyhow::bail!("MTP N Predict must be in [1, 8]");
+            }
+            if self.mtp_n_vocab < 1000 || self.mtp_n_vocab > 256000 {
+                anyhow::bail!("MTP Vocab Size must be in [1000, 256000]");
+            }
+            if self.mtp_n_embd < 256 || self.mtp_n_embd > 16384 {
+                anyhow::bail!("MTP Embedding must be in [256, 16384]");
+            }
         }
         Ok(())
     }

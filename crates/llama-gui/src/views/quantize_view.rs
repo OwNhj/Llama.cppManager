@@ -89,6 +89,38 @@ impl QuantizeView {
         });
         ui.checkbox(&mut self.params.flash_attention, "Flash Attention");
 
+        // MTP (Multi-Token Prediction) 参数
+        ui.separator();
+        ui.label("MTP (Multi-Token Prediction)");
+        ui.checkbox(&mut self.params.mtp_enabled, "启用 MTP");
+        if self.params.mtp_enabled {
+            ui.horizontal(|ui| {
+                ui.label("N Predict:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true),
+                );
+                ui.label("(每次预测的token数)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Vocab Size:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
+                        .step_by(1000.0)
+                        .show_value(true),
+                );
+                ui.label("(词表大小)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Embedding:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
+                        .step_by(256.0)
+                        .show_value(true),
+                );
+                ui.label("(嵌入维度)");
+            });
+        }
+
         // Quantization type selection
         ui.separator();
         ui.label("量化方式");
