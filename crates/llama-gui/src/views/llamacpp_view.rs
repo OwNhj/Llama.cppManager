@@ -96,8 +96,8 @@ impl LlamaCppView {
             log_output: Arc::new(Mutex::new(Vec::new())),
             backend: Backend::Cpu,
             cpu_optimization: CpuOptimization::Avx2,
-            source_path: format!("{}/llama.cpp", default_path),
-            build_path: format!("{}/llama.cpp-build", default_path),
+            source_path: std::path::Path::new(&default_path).join("llama.cpp").display().to_string(),
+            build_path: std::path::Path::new(&default_path).join("llama.cpp-build").display().to_string(),
             download_rx: None,
             compile_rx: None,
         }
@@ -327,6 +327,24 @@ impl LlamaCppView {
             let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", dest_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
+            // 检查目标目录是否已存在
+            if std::path::Path::new(&dest_path).exists() {
+                let _ = tx.send(InstallResult::Log("目标目录已存在，跳过下载".into()));
+                let _ = tx.send(InstallResult::Progress(1.0));
+                let _ = tx.send(InstallResult::Complete(format!("目录已存在: {}", dest_path)));
+                return;
+            }
+            
+            // 创建父目录
+            if let Some(parent) = std::path::Path::new(&dest_path).parent() {
+                if !parent.exists() {
+                    let _ = tx.send(InstallResult::Log(format!("创建目录: {}", parent.display())));
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+            
+            let _ = tx.send(InstallResult::Progress(0.3));
+            
             let output = std::process::Command::new("git")
                 .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &dest_path])
                 .output();
@@ -382,6 +400,25 @@ impl LlamaCppView {
         std::thread::spawn(move || {
             let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", source_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
+            
+            // 检查目标目录是否已存在
+            if std::path::Path::new(&source_path).exists() {
+                let _ = tx.send(InstallResult::Log("源码目录已存在，跳过下载".into()));
+                let _ = tx.send(InstallResult::Progress(0.5));
+                let _ = tx.send(InstallResult::Log("开始编译...".into()));
+                Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
+                return;
+            }
+            
+            // 创建父目录
+            if let Some(parent) = std::path::Path::new(&source_path).parent() {
+                if !parent.exists() {
+                    let _ = tx.send(InstallResult::Log(format!("创建目录: {}", parent.display())));
+                    let _ = std::fs::create_dir_all(parent);
+                }
+            }
+            
+            let _ = tx.send(InstallResult::Progress(0.3));
             
             let output = std::process::Command::new("git")
                 .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &source_path])
