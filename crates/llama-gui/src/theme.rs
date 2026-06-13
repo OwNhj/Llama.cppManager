@@ -122,6 +122,12 @@ impl AnimateTheme {
         // 设置分割线颜色
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border_color);
 
+        // 设置文本编辑框样式
+        visuals.widgets.noninteractive.bg_fill = self.background_color;
+        visuals.widgets.inactive.bg_fill = self.background_color;
+        visuals.widgets.hovered.bg_fill = self.background_color;
+        visuals.widgets.active.bg_fill = self.background_color;
+
         style.visuals = visuals;
 
         // 设置字体大小

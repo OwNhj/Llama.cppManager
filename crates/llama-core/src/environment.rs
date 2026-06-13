@@ -230,7 +230,7 @@ impl Environment {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let lines: Vec<&str> = stdout.lines().collect();
                 if lines.len() >= 2 {
-                    let parts: Vec<&str> = lines[1].trim().split_whitespace().collect();
+                    let parts: Vec<&str> = lines[1].split_whitespace().collect();
                     if parts.len() >= 2 {
                         let cores: usize = parts[0].parse().unwrap_or(1);
                         let threads: usize = parts[1].parse().unwrap_or(1);
@@ -337,15 +337,19 @@ impl Environment {
                         // 其余部分是GPU名称
                         let name = parts[..parts.len()-1].join(" ");
                         
-                        if name.is_empty() || vram_mb == 0 {
+                        if name.is_empty() {
                             continue;
                         }
 
                         let (backend, compute_capability) = if name.to_lowercase().contains("nvidia") {
                             (GpuBackend::Cuda, "Unknown".to_string())
-                        } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
+                        } else if name.to_lowercase().contains("amd") 
+                            || name.to_lowercase().contains("radeon") 
+                            || name.to_lowercase().contains("rx")
+                            || name.to_lowercase().contains("vega") {
                             (GpuBackend::Rocm, "Unknown".to_string())
-                        } else if name.to_lowercase().contains("intel") {
+                        } else if name.to_lowercase().contains("intel") 
+                            || name.to_lowercase().contains("arc") {
                             (GpuBackend::Intel, "Unknown".to_string())
                         } else {
                             (GpuBackend::Other("Unknown".into()), "Unknown".to_string())

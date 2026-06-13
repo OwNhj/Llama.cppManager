@@ -334,7 +334,7 @@ impl ModelView {
         ui.horizontal(|ui| {
             ui.label("Context Size:");
             ui.add(
-                egui::Slider::new(&mut self.params.context_size, 128..=131072)
+                egui::Slider::new(&mut self.params.context_size, 128..=2097152)
                     .step_by(128.0)
                     .show_value(true),
             );
@@ -353,42 +353,47 @@ impl ModelView {
         });
         ui.checkbox(&mut self.params.flash_attention, "Flash Attention");
 
-        // MTP设置（仅当模型支持时可用）
+        // MTP设置
         ui.separator();
         ui.label("MTP (Multi-Token Prediction)");
         if self.model_supports_mtp {
-            ui.checkbox(&mut self.params.mtp_enabled, "启用 MTP");
-            if self.params.mtp_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("N Predict:");
-                    ui.add(
-                        egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true),
-                    );
-                    ui.label("(每次预测的token数)");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Vocab Size:");
-                    ui.add(
-                        egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
-                            .step_by(1000.0)
-                            .show_value(true),
-                    );
-                    ui.label("(词表大小)");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Embedding:");
-                    ui.add(
-                        egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
-                            .step_by(256.0)
-                            .show_value(true),
-                    );
-                    ui.label("(嵌入维度)");
-                });
-            }
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::GREEN, "●");
+                ui.label("当前模型支持MTP");
+            });
         } else {
             ui.horizontal(|ui| {
-                ui.add_enabled(false, egui::Checkbox::new(&mut false, "启用 MTP"));
-                ui.label("(当前模型不支持MTP)");
+                ui.colored_label(egui::Color32::GRAY, "●");
+                ui.label("当前模型未检测到MTP支持");
+            });
+        }
+        
+        ui.checkbox(&mut self.params.mtp_enabled, "启用 MTP");
+        if self.params.mtp_enabled {
+            ui.horizontal(|ui| {
+                ui.label("N Predict:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true),
+                );
+                ui.label("(每次预测的token数)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Vocab Size:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
+                        .step_by(1000.0)
+                        .show_value(true),
+                );
+                ui.label("(词表大小)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Embedding:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
+                        .step_by(256.0)
+                        .show_value(true),
+                );
+                ui.label("(嵌入维度)");
             });
         }
 
