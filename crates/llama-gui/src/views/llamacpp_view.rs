@@ -324,7 +324,7 @@ impl LlamaCppView {
         self.download_rx = Some(rx);
         
         std::thread::spawn(move || {
-            let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", dest_path)));
+            let _ = tx.send(InstallResult::Log(format!("开始下载 llama.cpp 到: {}", dest_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
             // 检查目标目录是否已存在
@@ -344,23 +344,80 @@ impl LlamaCppView {
             }
             
             let _ = tx.send(InstallResult::Progress(0.3));
+            let _ = tx.send(InstallResult::Log("正在下载...".into()));
             
-            let output = std::process::Command::new("git")
-                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &dest_path])
-                .output();
+            // 尝试使用 git，如果失败则使用 PowerShell 下载 zip
+            let git_available = std::process::Command::new("git").arg("--version").output().is_ok();
             
-            match output {
-                Ok(out) => {
-                    if out.status.success() {
-                        let _ = tx.send(InstallResult::Progress(1.0));
-                        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
-                    } else {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let _ = tx.send(InstallResult::Error(stderr.to_string()));
+            if git_available {
+                let output = std::process::Command::new("git")
+                    .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &dest_path])
+                    .output();
+                
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            let _ = tx.send(InstallResult::Progress(1.0));
+                            let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let _ = tx.send(InstallResult::Error(format!("git clone 失败: {}", stderr)));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(InstallResult::Error(format!("git执行失败: {}", e)));
                     }
                 }
-                Err(e) => {
-                    let _ = tx.send(InstallResult::Error(format!("执行git失败: {}", e)));
+            } else {
+                // 使用 PowerShell 下载 zip
+                let _ = tx.send(InstallResult::Log("git 不可用，使用 PowerShell 下载...".into()));
+                let _ = tx.send(InstallResult::Progress(0.5));
+                
+                let zip_url = "https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.zip";
+                let zip_path = format!("{}.zip", dest_path);
+                
+                let output = std::process::Command::new("powershell")
+                    .args(["-Command", &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}'", zip_url, zip_path)])
+                    .output();
+                
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            let _ = tx.send(InstallResult::Log("下载完成，正在解压...".into()));
+                            let _ = tx.send(InstallResult::Progress(0.8));
+                            
+                            // 解压
+                            let extract_output = std::process::Command::new("powershell")
+                                .args(["-Command", &format!("Expand-Archive -Path '{}' -DestinationPath '{}' -Force", zip_path, dest_path)])
+                                .output();
+                            
+                            match extract_output {
+                                Ok(out) => {
+                                    if out.status.success() {
+                                        // 移动解压后的目录内容
+                                        let extracted_dir = format!("{}\\llama.cpp-master", dest_path);
+                                        if std::path::Path::new(&extracted_dir).exists() {
+                                            let _ = std::fs::rename(&extracted_dir, &dest_path);
+                                        }
+                                        let _ = tx.send(InstallResult::Progress(1.0));
+                                        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
+                                    } else {
+                                        let stderr = String::from_utf8_lossy(&out.stderr);
+                                        let _ = tx.send(InstallResult::Error(format!("解压失败: {}", stderr)));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(InstallResult::Error(format!("解压执行失败: {}", e)));
+                                }
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let _ = tx.send(InstallResult::Error(format!("下载失败: {}", stderr)));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(InstallResult::Error(format!("PowerShell执行失败: {}", e)));
+                    }
                 }
             }
         });
@@ -398,10 +455,10 @@ impl LlamaCppView {
         self.compile_rx = Some(rx);
         
         std::thread::spawn(move || {
-            let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", source_path)));
+            let _ = tx.send(InstallResult::Log(format!("开始下载 llama.cpp 到: {}", source_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
-            // 检查目标目录是否已存在
+            // 检查源码目录是否已存在
             if std::path::Path::new(&source_path).exists() {
                 let _ = tx.send(InstallResult::Log("源码目录已存在，跳过下载".into()));
                 let _ = tx.send(InstallResult::Progress(0.5));
@@ -418,25 +475,81 @@ impl LlamaCppView {
                 }
             }
             
-            let _ = tx.send(InstallResult::Progress(0.3));
+            let _ = tx.send(InstallResult::Progress(0.2));
+            let _ = tx.send(InstallResult::Log("正在下载...".into()));
             
-            let output = std::process::Command::new("git")
-                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &source_path])
-                .output();
+            // 尝试使用 git，如果失败则使用 PowerShell 下载 zip
+            let git_available = std::process::Command::new("git").arg("--version").output().is_ok();
             
-            match output {
-                Ok(out) => {
-                    if out.status.success() {
-                        let _ = tx.send(InstallResult::Progress(0.5));
-                        let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
-                        Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
-                    } else {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let _ = tx.send(InstallResult::Error(format!("下载失败: {}", stderr)));
+            if git_available {
+                let output = std::process::Command::new("git")
+                    .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &source_path])
+                    .output();
+                
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            let _ = tx.send(InstallResult::Progress(0.5));
+                            let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
+                            Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let _ = tx.send(InstallResult::Error(format!("git clone 失败: {}", stderr)));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(InstallResult::Error(format!("git执行失败: {}", e)));
                     }
                 }
-                Err(e) => {
-                    let _ = tx.send(InstallResult::Error(format!("执行git失败: {}", e)));
+            } else {
+                // 使用 PowerShell 下载 zip
+                let _ = tx.send(InstallResult::Log("git 不可用，使用 PowerShell 下载...".into()));
+                let _ = tx.send(InstallResult::Progress(0.3));
+                
+                let zip_url = "https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.zip";
+                let zip_path = format!("{}.zip", source_path);
+                
+                let output = std::process::Command::new("powershell")
+                    .args(["-Command", &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}'", zip_url, zip_path)])
+                    .output();
+                
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            let _ = tx.send(InstallResult::Log("下载完成，正在解压...".into()));
+                            let _ = tx.send(InstallResult::Progress(0.6));
+                            
+                            let extract_output = std::process::Command::new("powershell")
+                                .args(["-Command", &format!("Expand-Archive -Path '{}' -DestinationPath '{}' -Force", zip_path, source_path)])
+                                .output();
+                            
+                            match extract_output {
+                                Ok(out) => {
+                                    if out.status.success() {
+                                        let extracted_dir = format!("{}\\llama.cpp-master", source_path);
+                                        if std::path::Path::new(&extracted_dir).exists() {
+                                            let _ = std::fs::rename(&extracted_dir, &source_path);
+                                        }
+                                        let _ = tx.send(InstallResult::Progress(0.5));
+                                        let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
+                                        Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
+                                    } else {
+                                        let stderr = String::from_utf8_lossy(&out.stderr);
+                                        let _ = tx.send(InstallResult::Error(format!("解压失败: {}", stderr)));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(InstallResult::Error(format!("解压执行失败: {}", e)));
+                                }
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let _ = tx.send(InstallResult::Error(format!("下载失败: {}", stderr)));
+                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(InstallResult::Error(format!("PowerShell执行失败: {}", e)));
+                    }
                 }
             }
         });
