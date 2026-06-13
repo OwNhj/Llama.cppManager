@@ -1,0 +1,17 @@
+[package]
+name = "llama-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+sysinfo.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

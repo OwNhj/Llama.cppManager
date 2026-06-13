@@ -1,0 +1,19 @@
+[package]
+name = "llama-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line interface for llama-manager"
+
+[[bin]]
+name = "llama-cli"
+path = "src/main.rs"
+
+[dependencies]
+llama-core = { path = "../llama-core" }
+llama-server = { path = "../llama-server" }
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
