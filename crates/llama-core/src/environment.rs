@@ -316,36 +316,59 @@ impl Environment {
                         vec![json.clone()]
                     };
                     
+                    // 过滤掉虚拟显示设备
+                    let skip_names = ["mirage", "sharing", "virtual", "microsoft basic"];
+                    
                     for gpu_json in &gpu_list {
                         let name = gpu_json.get("Name")
                             .and_then(|v| v.as_str())
                             .unwrap_or("Unknown GPU")
                             .to_string();
                         
+                        // 跳过虚拟显示设备
+                        let name_lower = name.to_lowercase();
+                        if skip_names.iter().any(|skip| name_lower.contains(skip)) {
+                            continue;
+                        }
+                        
+                        if name.is_empty() || name == "Unknown GPU" {
+                            continue;
+                        }
+                        
                         let vram_bytes = gpu_json.get("AdapterRAM")
                             .and_then(|v| v.as_u64())
                             .unwrap_or(0);
-                        let vram_mb = vram_bytes / 1024 / 1024;
+                        let mut vram_mb = vram_bytes / 1024 / 1024;
+                        
+                        // 对于AMD GPU，AdapterRAM可能不准确，尝试从其他来源获取
+                        // 如果显存小于1GB但名称包含AMD/Radeon，可能是报告错误
+                        if vram_mb < 1024 && (name_lower.contains("amd") || name_lower.contains("radeon")) {
+                            // 尝试使用常见显存大小
+                            if name_lower.contains("9070") || name_lower.contains("9060") {
+                                vram_mb = 16384; // 16GB
+                            } else if name_lower.contains("7900") || name_lower.contains("7800") {
+                                vram_mb = 20480; // 20GB
+                            } else if name_lower.contains("6900") || name_lower.contains("6800") {
+                                vram_mb = 16384; // 16GB
+                            } else if name_lower.contains("6700") || name_lower.contains("6600") {
+                                vram_mb = 12288; // 12GB
+                            }
+                        }
                         
                         let driver_version = gpu_json.get("DriverVersion")
                             .and_then(|v| v.as_str())
                             .unwrap_or("Unknown")
                             .to_string();
-                        
-                        if name.is_empty() || name == "Unknown GPU" {
-                            continue;
-                        }
 
-                        let (backend, compute_capability) = if name.to_lowercase().contains("nvidia") {
+                        let (backend, compute_capability) = if name_lower.contains("nvidia") {
                             (GpuBackend::Cuda, "Unknown".to_string())
-                        } else if name.to_lowercase().contains("amd") 
-                            || name.to_lowercase().contains("radeon") 
-                            || name.to_lowercase().contains("rx")
-                            || name.to_lowercase().contains("vega")
-                            || name.to_lowercase().contains("9070") {
+                        } else if name_lower.contains("amd") 
+                            || name_lower.contains("radeon") 
+                            || name_lower.contains("rx")
+                            || name_lower.contains("vega") {
                             (GpuBackend::Rocm, "Unknown".to_string())
-                        } else if name.to_lowercase().contains("intel") 
-                            || name.to_lowercase().contains("arc") {
+                        } else if name_lower.contains("intel") 
+                            || name_lower.contains("arc") {
                             (GpuBackend::Intel, "Unknown".to_string())
                         } else {
                             (GpuBackend::Other("Unknown".into()), "Unknown".to_string())

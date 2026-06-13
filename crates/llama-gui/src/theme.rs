@@ -39,14 +39,14 @@ impl AnimateTheme {
     /// 深色主题
     pub fn dark() -> Self {
         Self {
-            background_color: Color32::from_rgb(25, 25, 35),
-            card_color: Color32::from_rgb(35, 35, 50),
+            background_color: Color32::from_rgb(30, 30, 40),
+            card_color: Color32::from_rgb(40, 40, 55),
             primary_color: Color32::from_rgb(100, 149, 237),
             secondary_color: Color32::from_rgb(70, 130, 180),
             accent_color: Color32::from_rgb(255, 165, 0),
-            text_color: Color32::from_rgb(240, 240, 240),
-            text_secondary_color: Color32::from_rgb(160, 160, 180),
-            border_color: Color32::from_rgb(60, 60, 80),
+            text_color: Color32::from_rgb(255, 255, 255),
+            text_secondary_color: Color32::from_rgb(180, 180, 200),
+            border_color: Color32::from_rgb(70, 70, 90),
             shadow_color: Color32::from_rgba_premultiplied(0, 0, 0, 50),
             rounding: Rounding::same(8.0),
             animation_speed: 0.15,
