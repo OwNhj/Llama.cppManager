@@ -122,14 +122,21 @@ impl AnimateTheme {
         // 设置分割线颜色
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border_color);
 
-        // 设置文本编辑框样式
+        // 设置文本编辑框样式 - 确保文字清晰可见
         visuals.widgets.noninteractive.bg_fill = self.background_color;
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.text_color);
+        
         visuals.widgets.inactive.bg_fill = self.background_color;
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.text_color);
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, self.border_color);
+        
         visuals.widgets.hovered.bg_fill = self.background_color;
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.text_color);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.primary_color);
+        
         visuals.widgets.active.bg_fill = self.background_color;
         visuals.widgets.active.fg_stroke = Stroke::new(1.0, self.text_color);
+        visuals.widgets.active.bg_stroke = Stroke::new(2.0, self.primary_color);
 
         style.visuals = visuals;
 

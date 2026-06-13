@@ -86,30 +86,21 @@ impl EnvView {
             if env.gpus.is_empty() {
                 ui.label("未检测到GPU");
             } else {
-                for (i, gpu) in env.gpus.iter().enumerate() {
-                    egui::Grid::new(format!("gpu_grid_{}", i))
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.label("型号:");
-                            ui.label(&gpu.name);
-                            ui.end_row();
-                            ui.label("后端:");
-                            ui.label(gpu.backend.to_string());
-                            ui.end_row();
-                            ui.label("显存:");
-                            ui.label(format!(
-                                "{} GB / {} GB",
-                                gpu.available_vram_mb / 1024,
-                                gpu.vram_mb / 1024
-                            ));
-                            ui.end_row();
-                            ui.label("驱动:");
-                            ui.label(&gpu.driver_version);
-                            ui.end_row();
-                            ui.label("计算能力:");
-                            ui.label(&gpu.compute_capability);
-                            ui.end_row();
-                        });
+                // 去重：按名称去重
+                let mut seen_names = std::collections::HashSet::new();
+                let unique_gpus: Vec<_> = env.gpus.iter().filter(|gpu| {
+                    seen_names.insert(gpu.name.clone())
+                }).collect();
+                
+                for gpu in unique_gpus {
+                    ui.horizontal(|ui| {
+                        ui.label("●");
+                        ui.strong(&gpu.name);
+                        ui.separator();
+                        ui.label(gpu.backend.to_string());
+                        ui.separator();
+                        ui.label(format!("{} GB", gpu.vram_mb / 1024));
+                    });
                 }
             }
         } else {
