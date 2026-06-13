@@ -1,10 +1,11 @@
-use crate::views::{env_view, hf_view, model_view, offload_view, quantize_view, settings_view};
+use crate::views::{chat_view, env_view, hf_view, model_view, offload_view, quantize_view, settings_view};
 use crate::theme::AnimateTheme;
 use eframe::egui;
 
 #[derive(PartialEq)]
 enum Tab {
     Home,
+    Chat,
     HuggingFace,
     Quantize,
     Offload,
@@ -14,6 +15,7 @@ enum Tab {
 pub struct App {
     current_tab: Tab,
     home_view: HomeView,
+    chat_view: chat_view::ChatView,
     hf_view: hf_view::HfView,
     quantize_view: quantize_view::QuantizeView,
     offload_view: offload_view::OffloadView,
@@ -44,6 +46,7 @@ impl App {
         Self {
             current_tab: Tab::Home,
             home_view: HomeView::new(),
+            chat_view: chat_view::ChatView::new(),
             hf_view: hf_view::HfView::new(),
             quantize_view: quantize_view::QuantizeView::new(),
             offload_view: offload_view::OffloadView::new(),
@@ -81,6 +84,12 @@ impl eframe::App for App {
                     .clicked()
                 {
                     self.current_tab = Tab::Home;
+                }
+                if ui
+                    .selectable_label(self.current_tab == Tab::Chat, "对话")
+                    .clicked()
+                {
+                    self.current_tab = Tab::Chat;
                 }
                 if ui
                     .selectable_label(self.current_tab == Tab::HuggingFace, "HuggingFace")
@@ -134,17 +143,22 @@ impl eframe::App for App {
                     self.home_view.env_view.show(&mut columns[1]);
                 });
 
-                // 检查模型是否变更，更新offload视图
+                // 检查模型是否变更，更新offload视图和对话视图
                 let current_path = self.home_view.model_view.current_model_path();
                 if current_path != self.last_model_path {
                     if let Some(ref name) = self.home_view.model_view.current_model_name() {
-                        self.offload_view.set_model_info(name, 32); // 默认32层，实际应从模型元数据读取
+                        self.offload_view.set_model_info(name, 32);
+                        // 更新对话视图
+                        let params = self.home_view.model_view.current_params().clone();
+                        self.chat_view.set_model_loaded(name, params);
                     } else {
                         self.offload_view.clear_model_info();
+                        self.chat_view.clear_model();
                     }
                     self.last_model_path = current_path;
                 }
             }
+            Tab::Chat => self.chat_view.show(ui),
             Tab::HuggingFace => self.hf_view.show(ui),
             Tab::Quantize => self.quantize_view.show(ui),
             Tab::Offload => self.offload_view.show(ui),
