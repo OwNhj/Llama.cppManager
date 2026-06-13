@@ -47,23 +47,28 @@ impl EnvView {
                 ui.add(egui::Slider::new(&mut self.refresh_interval, 5..=60).suffix("秒"));
             }
             if ui.button("立即刷新").clicked() {
-                self.env = Some(Environment::detect());
-                self.last_refresh = std::time::Instant::now();
+                self.refresh();
             }
         });
 
         // 自动刷新逻辑
         if self.auto_refresh
-            && self.last_refresh.elapsed() >= std::time::Duration::from_secs(self.refresh_interval as u64)
+            && self.last_refresh.elapsed()
+                >= std::time::Duration::from_secs(self.refresh_interval as u64)
         {
-            self.env = Some(Environment::detect());
-            self.last_refresh = std::time::Instant::now();
+            self.refresh();
         }
 
         if let Some(ref env) = self.env {
+            // 运行环境信息（CUDA/ROCm/Vulkan等）
+            ui.separator();
+            ui.collapsing("运行环境", |ui| {
+                self.show_runtime_env(ui, env);
+            });
+
             // 操作系统信息
             ui.separator();
-            ui.collapsing("操作系统信息", |ui| {
+            ui.collapsing("操作系统", |ui| {
                 egui::Grid::new("os_grid").striped(true).show(ui, |ui| {
                     ui.label("系统:");
                     ui.label(&env.os.name);
@@ -74,69 +79,49 @@ impl EnvView {
                     ui.label("架构:");
                     ui.label(&env.os.architecture);
                     ui.end_row();
-                    ui.label("Rust版本:");
-                    ui.label(&env.rust_toolchain);
-                    ui.end_row();
                 });
             });
 
             // CPU信息
             ui.separator();
-            ui.collapsing("CPU 信息", |ui| {
+            ui.collapsing("CPU", |ui| {
                 egui::Grid::new("cpu_grid").striped(true).show(ui, |ui| {
                     ui.label("型号:");
                     ui.label(&env.cpu.model);
                     ui.end_row();
-                    ui.label("物理核心:");
-                    ui.label(format!("{} 核", env.cpu.cores));
+                    ui.label("核心/线程:");
+                    ui.label(format!("{} 核 / {} 线程", env.cpu.cores, env.cpu.threads));
                     ui.end_row();
-                    ui.label("逻辑线程:");
-                    ui.label(format!("{} 线程", env.cpu.threads));
-                    ui.end_row();
-                    ui.label("支持指令集:");
+                    ui.label("指令集:");
                     ui.label(if env.cpu.features.is_empty() {
                         "无".to_string()
                     } else {
                         env.cpu.features.join(", ")
                     });
                     ui.end_row();
-                    ui.label("总内存:");
-                    ui.label(format!("{} GB", env.cpu.total_memory_mb / 1024));
-                    ui.end_row();
-                    ui.label("可用内存:");
-                    ui.label(format!("{} GB", env.cpu.available_memory_mb / 1024));
-                    ui.end_row();
-                    ui.label("内存使用率:");
-                    let usage = if env.cpu.total_memory_mb > 0 {
-                        ((env.cpu.total_memory_mb - env.cpu.available_memory_mb) as f64
-                            / env.cpu.total_memory_mb as f64
-                            * 100.0) as u32
-                    } else {
-                        0
-                    };
-                    ui.label(format!("{}%", usage));
+                    ui.label("内存:");
+                    ui.label(format!(
+                        "{} GB / {} GB (使用 {}%)",
+                        env.cpu.available_memory_mb / 1024,
+                        env.cpu.total_memory_mb / 1024,
+                        if env.cpu.total_memory_mb > 0 {
+                            (env.cpu.total_memory_mb - env.cpu.available_memory_mb) * 100
+                                / env.cpu.total_memory_mb
+                        } else {
+                            0
+                        }
+                    ));
                     ui.end_row();
                 });
-
-                // 内存使用进度条
-                ui.label("内存使用:");
-                let usage = if env.cpu.total_memory_mb > 0 {
-                    (env.cpu.total_memory_mb - env.cpu.available_memory_mb) as f32
-                        / env.cpu.total_memory_mb as f32
-                } else {
-                    0.0
-                };
-                ui.add(egui::ProgressBar::new(usage).text(format!("{}%", (usage * 100.0) as u32)));
             });
 
             // GPU信息
             ui.separator();
-            ui.collapsing("GPU 信息", |ui| {
+            ui.collapsing("GPU", |ui| {
                 if env.gpus.is_empty() {
                     ui.label("未检测到GPU");
                 } else {
                     for (i, gpu) in env.gpus.iter().enumerate() {
-                        ui.label(format!("GPU {}:", i));
                         egui::Grid::new(format!("gpu_grid_{}", i))
                             .striped(true)
                             .show(ui, |ui| {
@@ -146,41 +131,20 @@ impl EnvView {
                                 ui.label("后端:");
                                 ui.label(gpu.backend.to_string());
                                 ui.end_row();
-                                ui.label("驱动版本:");
+                                ui.label("显存:");
+                                ui.label(format!(
+                                    "{} GB / {} GB",
+                                    gpu.available_vram_mb / 1024,
+                                    gpu.vram_mb / 1024
+                                ));
+                                ui.end_row();
+                                ui.label("驱动:");
                                 ui.label(&gpu.driver_version);
                                 ui.end_row();
                                 ui.label("计算能力:");
                                 ui.label(&gpu.compute_capability);
                                 ui.end_row();
-                                ui.label("总显存:");
-                                ui.label(format!("{} GB", gpu.vram_mb / 1024));
-                                ui.end_row();
-                                ui.label("可用显存:");
-                                ui.label(format!("{} GB", gpu.available_vram_mb / 1024));
-                                ui.end_row();
-                                ui.label("显存使用率:");
-                                let usage = if gpu.vram_mb > 0 {
-                                    ((gpu.vram_mb - gpu.available_vram_mb) as f64 / gpu.vram_mb as f64
-                                        * 100.0) as u32
-                                } else {
-                                    0
-                                };
-                                ui.label(format!("{}%", usage));
-                                ui.end_row();
                             });
-
-                        // 显存使用进度条
-                        ui.label("显存使用:");
-                        let usage = if gpu.vram_mb > 0 {
-                            (gpu.vram_mb - gpu.available_vram_mb) as f32 / gpu.vram_mb as f32
-                        } else {
-                            0.0
-                        };
-                        ui.add(
-                            egui::ProgressBar::new(usage)
-                                .text(format!("{}%", (usage * 100.0) as u32)),
-                        );
-
                         if i < env.gpus.len() - 1 {
                             ui.separator();
                         }
@@ -188,53 +152,83 @@ impl EnvView {
                 }
             });
 
-            // NPU信息
-            ui.separator();
-            ui.collapsing("NPU 信息", |ui| {
-                if let Some(ref npu) = env.npu {
-                    egui::Grid::new("npu_grid").striped(true).show(ui, |ui| {
-                        ui.label("型号:");
-                        ui.label(&npu.name);
-                        ui.end_row();
-                        ui.label("厂商:");
-                        ui.label(&npu.vendor);
-                        ui.end_row();
-                        ui.label("算力:");
-                        ui.label(format!("{} TOPS", npu.tops));
-                        ui.end_row();
-                    });
-                } else {
-                    ui.label("未检测到NPU");
-                }
-            });
-
             // Offload建议
             ui.separator();
             ui.collapsing("Offload 建议", |ui| {
                 let rec = env.recommend_offload(32);
-                egui::Grid::new("offload_grid").striped(true).show(ui, |ui| {
-                    ui.label("模型总层数:");
-                    ui.label(format!("{} 层", rec.total_layers));
-                    ui.end_row();
-                    ui.label("建议GPU层数:");
-                    ui.label(format!("{} 层", rec.gpu_layers));
-                    ui.end_row();
-                    ui.label("建议原因:");
-                    ui.label(&rec.reason);
-                    ui.end_row();
-                });
-
-                // GPU层数建议进度条
-                ui.label("GPU卸载比例:");
-                let ratio = rec.gpu_layers as f32 / rec.total_layers as f32;
-                ui.add(
-                    egui::ProgressBar::new(ratio)
-                        .text(format!("{}/{} 层", rec.gpu_layers, rec.total_layers)),
-                );
+                ui.label(&rec.reason);
+                ui.label(format!("建议GPU层数: {}/{}", rec.gpu_layers, rec.total_layers));
             });
         } else {
             ui.separator();
-            ui.label("点击\"立即刷新\"按钮检测系统环境");
+            ui.label("点击\"立即刷新\"检测系统环境");
         }
+    }
+
+    fn show_runtime_env(&self, ui: &mut egui::Ui, env: &Environment) {
+        let runtime = &env.runtime;
+
+        // CUDA
+        ui.horizontal(|ui| {
+            ui.strong("CUDA:");
+            if let Some(ref cuda) = runtime.cuda {
+                ui.colored_label(egui::Color32::GREEN, "已安装");
+                ui.label(format!("版本: {}", cuda.version));
+                if let Some(ref cudnn) = cuda.cudnn_version {
+                    ui.label(format!("cuDNN: {}", cudnn));
+                }
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "未安装");
+            }
+        });
+
+        // ROCm
+        ui.horizontal(|ui| {
+            ui.strong("ROCm:");
+            if let Some(ref rocm) = runtime.rocm {
+                ui.colored_label(egui::Color32::GREEN, "已安装");
+                ui.label(format!("版本: {}", rocm.version));
+                if let Some(ref hipcc) = rocm.hipcc_version {
+                    ui.label(format!("hipcc: {}", hipcc));
+                }
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "未安装");
+            }
+        });
+
+        // Vulkan
+        ui.horizontal(|ui| {
+            ui.strong("Vulkan:");
+            if let Some(ref vulkan) = runtime.vulkan {
+                ui.colored_label(egui::Color32::GREEN, "已安装");
+                ui.label(format!("版本: {}", vulkan.version));
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "未安装");
+            }
+        });
+
+        // Metal (macOS)
+        ui.horizontal(|ui| {
+            ui.strong("Metal:");
+            if let Some(ref metal) = runtime.metal {
+                ui.colored_label(egui::Color32::GREEN, "已支持");
+                ui.label(&metal.version);
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "不支持/未检测");
+            }
+        });
+
+        // OneAPI
+        ui.horizontal(|ui| {
+            ui.strong("OneAPI:");
+            if let Some(ref oneapi) = runtime.oneapi {
+                ui.colored_label(egui::Color32::GREEN, "已安装");
+                if let Some(ref dpcpp) = oneapi.dpcpp_version {
+                    ui.label(format!("dpcpp: {}", dpcpp));
+                }
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "未安装");
+            }
+        });
     }
 }

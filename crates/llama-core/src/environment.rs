@@ -3,51 +3,33 @@ use std::fmt;
 /// CPU information detected from the system.
 #[derive(Debug, Clone)]
 pub struct CpuInfo {
-    /// CPU model name.
     pub model: String,
-    /// Number of physical cores.
     pub cores: usize,
-    /// Number of hardware threads.
     pub threads: usize,
-    /// Detected CPU features (e.g. AVX2, FMA).
     pub features: Vec<String>,
-    /// Total system memory in MiB.
     pub total_memory_mb: u64,
-    /// Available system memory in MiB.
     pub available_memory_mb: u64,
 }
 
 /// GPU information detected from the system.
 #[derive(Debug, Clone)]
 pub struct GpuInfo {
-    /// GPU model name.
     pub name: String,
-    /// Total VRAM in MiB.
     pub vram_mb: u64,
-    /// Available VRAM in MiB.
     pub available_vram_mb: u64,
-    /// GPU compute backend.
     pub backend: GpuBackend,
-    /// GPU driver version.
     pub driver_version: String,
-    /// GPU compute capability (e.g. "8.9" for Ada Lovelace).
     pub compute_capability: String,
 }
 
 /// Supported GPU compute backends.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GpuBackend {
-    /// NVIDIA CUDA.
     Cuda,
-    /// AMD ROCm.
     Rocm,
-    /// Apple Metal.
     Metal,
-    /// Vulkan compute.
     Vulkan,
-    /// Intel Arc.
     Intel,
-    /// Other/unknown backend with a name string.
     Other(String),
 }
 
@@ -67,15 +49,10 @@ impl fmt::Display for GpuBackend {
 /// Target device for inference execution.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeviceType {
-    /// CPU-only inference.
     Cpu,
-    /// NVIDIA GPU with device ID.
     Cuda(u32),
-    /// AMD GPU with device ID.
     Rocm(u32),
-    /// Apple Metal.
     Metal,
-    /// Neural Processing Unit.
     Npu,
 }
 
@@ -94,63 +71,125 @@ impl fmt::Display for DeviceType {
 /// NPU information detected from the system.
 #[derive(Debug, Clone)]
 pub struct NpuInfo {
-    /// NPU model name.
     pub name: String,
-    /// NPU vendor.
     pub vendor: String,
-    /// NPU compute capability in TOPS.
     pub tops: f32,
+}
+
+/// 运行环境信息（CUDA/ROCm/Vulkan等）
+#[derive(Debug, Clone)]
+pub struct RuntimeEnvironment {
+    /// CUDA运行环境
+    pub cuda: Option<CudaInfo>,
+    /// ROCm运行环境
+    pub rocm: Option<RocmInfo>,
+    /// Vulkan运行环境
+    pub vulkan: Option<VulkanInfo>,
+    /// Metal运行环境（macOS）
+    pub metal: Option<MetalInfo>,
+    /// OneAPI/Intel运行环境
+    pub oneapi: Option<OneApiInfo>,
+    /// Vulkan SDK版本
+    pub vulkan_sdk: Option<String>,
+}
+
+/// CUDA运行环境信息
+#[derive(Debug, Clone)]
+pub struct CudaInfo {
+    /// CUDA版本
+    pub version: String,
+    /// CUDA工具包路径
+    pub path: String,
+    /// cuDNN版本
+    pub cudnn_version: Option<String>,
+    /// nvcc编译器版本
+    pub nvcc_version: Option<String>,
+    /// CUDA运行时库路径
+    pub runtime_lib: Option<String>,
+}
+
+/// ROCm运行环境信息
+#[derive(Debug, Clone)]
+pub struct RocmInfo {
+    /// ROCm版本
+    pub version: String,
+    /// ROCm路径
+    pub path: String,
+    /// MIOpen版本
+    pub miopen_version: Option<String>,
+    /// hipcc编译器版本
+    pub hipcc_version: Option<String>,
+}
+
+/// Vulkan运行环境信息
+#[derive(Debug, Clone)]
+pub struct VulkanInfo {
+    /// Vulkan SDK版本
+    pub version: String,
+    /// Vulkan SDK路径
+    pub path: String,
+    /// vulkaninfo版本
+    pub vulkaninfo_version: Option<String>,
+}
+
+/// Metal运行环境信息（macOS）
+#[derive(Debug, Clone)]
+pub struct MetalInfo {
+    /// Metal版本
+    pub version: String,
+    /// Xcode版本
+    pub xcode_version: Option<String>,
+}
+
+/// OneAPI/Intel运行环境信息
+#[derive(Debug, Clone)]
+pub struct OneApiInfo {
+    /// OneAPI版本
+    pub version: String,
+    /// DPC++编译器版本
+    pub dpcpp_version: Option<String>,
 }
 
 /// Recommended offload configuration for a model.
 #[derive(Debug, Clone)]
 pub struct OffloadRecommendation {
-    /// Total number of layers in the model.
     pub total_layers: u32,
-    /// Number of layers to offload to GPU.
     pub gpu_layers: u32,
-    /// Human-readable reason for this recommendation.
     pub reason: String,
 }
 
-/// Detected system environment (CPU, GPU, NPU).
+/// Detected system environment (CPU, GPU, NPU, Runtime).
 #[derive(Debug, Clone)]
 pub struct Environment {
-    /// Detected CPU information.
     pub cpu: CpuInfo,
-    /// Detected GPUs.
     pub gpus: Vec<GpuInfo>,
-    /// Detected NPU information.
     pub npu: Option<NpuInfo>,
-    /// Operating system information.
+    pub runtime: RuntimeEnvironment,
     pub os: OsInfo,
-    /// Rust toolchain information.
     pub rust_toolchain: String,
 }
 
 /// Operating system information.
 #[derive(Debug, Clone)]
 pub struct OsInfo {
-    /// OS name (e.g. "Windows 11", "Ubuntu 22.04").
     pub name: String,
-    /// OS version.
     pub version: String,
-    /// OS architecture (e.g. "x86_64", "aarch64").
     pub architecture: String,
 }
 
 impl Environment {
-    /// Detect the current system environment (CPU, GPU, NPU).
     pub fn detect() -> Self {
         let cpu = Self::detect_cpu();
         let gpus = Self::detect_gpus();
         let npu = Self::detect_npu();
+        let runtime = Self::detect_runtime();
         let os = Self::detect_os();
         let rust_toolchain = Self::detect_rust_toolchain();
         Self {
             cpu,
             gpus,
             npu,
+            runtime,
             os,
             rust_toolchain,
         }
@@ -200,7 +239,7 @@ impl Environment {
     fn detect_gpus() -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
 
-        // 检测NVIDIA GPU (通过nvidia-smi)
+        // NVIDIA GPU
         if let Ok(output) = std::process::Command::new("nvidia-smi")
             .args([
                 "--query-gpu=name,memory.total,memory.free,driver_version,compute_cap",
@@ -212,74 +251,15 @@ impl Environment {
             for line in stdout.lines() {
                 let parts: Vec<&str> = line.split(", ").collect();
                 if parts.len() >= 5 {
-                    let name = parts[0].trim().to_string();
-                    let vram_mb: u64 = parts[1].trim().parse().unwrap_or(0);
-                    let available_vram_mb: u64 = parts[2].trim().parse().unwrap_or(0);
-                    let driver_version = parts[3].trim().to_string();
-                    let compute_capability = parts[4].trim().to_string();
-
                     gpus.push(GpuInfo {
-                        name,
-                        vram_mb,
-                        available_vram_mb,
+                        name: parts[0].trim().to_string(),
+                        vram_mb: parts[1].trim().parse().unwrap_or(0),
+                        available_vram_mb: parts[2].trim().parse().unwrap_or(0),
                         backend: GpuBackend::Cuda,
-                        driver_version,
-                        compute_capability,
+                        driver_version: parts[3].trim().to_string(),
+                        compute_capability: parts[4].trim().to_string(),
                     });
                 }
-            }
-        }
-
-        // 检测AMD GPU (通过rocm-smi)
-        if let Ok(output) = std::process::Command::new("rocm-smi")
-            .args(["--showmeminfo", "vram", "--json"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                if let Some(gpu_list) = json.get("card0") {
-                    let total = gpu_list
-                        .get("VRAM Total Memory (B)")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0)
-                        / 1024
-                        / 1024;
-                    let used = gpu_list
-                        .get("VRAM Total Used Memory (B)")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0)
-                        / 1024
-                        / 1024;
-
-                    gpus.push(GpuInfo {
-                        name: "AMD GPU".into(),
-                        vram_mb: total,
-                        available_vram_mb: total - used,
-                        backend: GpuBackend::Rocm,
-                        driver_version: "Unknown".into(),
-                        compute_capability: "Unknown".into(),
-                    });
-                }
-            }
-        }
-
-        // 检测Intel GPU (通过oneinfo)
-        if let Ok(output) = std::process::Command::new("oneinfo")
-            .args(["--device", "0"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("Intel") {
-                gpus.push(GpuInfo {
-                    name: "Intel Arc GPU".into(),
-                    vram_mb: 0, // 需要更详细的检测
-                    available_vram_mb: 0,
-                    backend: GpuBackend::Intel,
-                    driver_version: "Unknown".into(),
-                    compute_capability: "Unknown".into(),
-                });
             }
         }
 
@@ -287,31 +267,251 @@ impl Environment {
     }
 
     fn detect_npu() -> Option<NpuInfo> {
-        // 检测Intel NPU
-        if let Ok(output) = std::process::Command::new("npu-smi").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("Intel") || stdout.contains("NPU") {
-                return Some(NpuInfo {
-                    name: "Intel NPU".into(),
-                    vendor: "Intel".into(),
-                    tops: 10.0, // 典型的Intel NPU性能
-                });
-            }
-        }
+        None
+    }
 
-        // 检测AMD NPU
-        if let Ok(output) = std::process::Command::new("rocm-smi").output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("NPU") || stdout.contains("XDNA") {
-                return Some(NpuInfo {
-                    name: "AMD NPU".into(),
-                    vendor: "AMD".into(),
-                    tops: 10.0, // 典型的AMD NPU性能
+    fn detect_runtime() -> RuntimeEnvironment {
+        RuntimeEnvironment {
+            cuda: Self::detect_cuda(),
+            rocm: Self::detect_rocm(),
+            vulkan: Self::detect_vulkan(),
+            metal: Self::detect_metal(),
+            oneapi: Self::detect_oneapi(),
+            vulkan_sdk: Self::detect_vulkan_sdk(),
+        }
+    }
+
+    /// 检测CUDA运行环境
+    fn detect_cuda() -> Option<CudaInfo> {
+        // 检测CUDA路径
+        let cuda_path = std::env::var("CUDA_PATH")
+            .or_else(|_| std::env::var("CUDA_HOME"))
+            .ok();
+
+        // 检测nvcc版本
+        let nvcc_version = std::process::Command::new("nvcc")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.contains("release") {
+                        return Some(
+                            line.split("release")
+                                .nth(1)?
+                                .split(',')
+                                .next()?
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                }
+                None
+            });
+
+        // 检测nvidia-smi获取CUDA版本
+        let cuda_version = std::process::Command::new("nvidia-smi")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if line.contains("CUDA Version") {
+                        return Some(
+                            line.split("CUDA Version:")
+                                .nth(1)?
+                                .split_whitespace()
+                                .next()?
+                                .trim()
+                                .to_string(),
+                        );
+                    }
+                }
+                None
+            });
+
+        if nvcc_version.is_some() || cuda_version.is_some() {
+            // 检测cuDNN版本
+            let cudnn_version = std::process::Command::new("nvcc")
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|_| {
+                    // 尝试读取cuDNN版本文件
+                    let cudnn_paths = [
+                        "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/cudnn_version.h",
+                        "/usr/include/cudnn_version.h",
+                    ];
+                    for path in &cudnn_paths {
+                        if let Ok(content) = std::fs::read_to_string(path) {
+                            for line in content.lines() {
+                                if line.contains("#define CUDNN_MAJOR") {
+                                    let major = line.split_whitespace().last()?;
+                                    return Some(format!("{}.x", major));
+                                }
+                            }
+                        }
+                    }
+                    None
                 });
-            }
+
+            return Some(CudaInfo {
+                version: cuda_version
+                    .or(nvcc_version.clone())
+                    .unwrap_or_else(|| "Unknown".into()),
+                path: cuda_path.unwrap_or_else(|| "Unknown".into()),
+                cudnn_version,
+                nvcc_version,
+                runtime_lib: None,
+            });
         }
 
         None
+    }
+
+    /// 检测ROCm运行环境
+    fn detect_rocm() -> Option<RocmInfo> {
+        // 检测ROCm路径
+        let rocm_path = std::env::var("ROCM_PATH")
+            .or_else(|_| std::env::var("ROCM_HOME"))
+            .ok();
+
+        // 检测hipcc版本
+        let hipcc_version = std::process::Command::new("hipcc")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout
+                    .lines()
+                    .find(|l| l.contains("HIP version"))
+                    .map(|l| {
+                        l.split("HIP version:")
+                            .nth(1)
+                            .unwrap_or("Unknown")
+                            .trim()
+                            .to_string()
+                    })
+            });
+
+        // 检测ROCm版本
+        let rocm_version = std::process::Command::new("rocm-smi")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.lines().next().map(|l| l.trim().to_string())
+            });
+
+        if hipcc_version.is_some() || rocm_version.is_some() {
+            return Some(RocmInfo {
+                version: rocm_version
+                    .or(hipcc_version.clone())
+                    .unwrap_or_else(|| "Unknown".into()),
+                path: rocm_path.unwrap_or_else(|| "Unknown".into()),
+                miopen_version: None,
+                hipcc_version,
+            });
+        }
+
+        None
+    }
+
+    /// 检测Vulkan运行环境
+    fn detect_vulkan() -> Option<VulkanInfo> {
+        // 检测vulkaninfo
+        let vulkan_info = std::process::Command::new("vulkaninfo")
+            .arg("--summary")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let version = stdout
+                    .lines()
+                    .find(|l| l.contains("apiVersion"))
+                    .and_then(|l| {
+                        l.split('=')
+                            .nth(1)?
+                            .split_whitespace()
+                            .next()?
+                            .trim()
+                            .strip_prefix('v')
+                            .map(|s| s.to_string())
+                    });
+
+                if version.is_some() {
+                    Some(VulkanInfo {
+                        version: version.unwrap_or_else(|| "Unknown".into()),
+                        path: "System".into(),
+                        vulkaninfo_version: None,
+                    })
+                } else {
+                    None
+                }
+            });
+
+        vulkan_info
+    }
+
+    /// 检测Metal运行环境（macOS）
+    fn detect_metal() -> Option<MetalInfo> {
+        #[cfg(target_os = "macos")]
+        {
+            // 检测Metal支持
+            let metal_output = std::process::Command::new("system_profiler")
+                .arg("SPDisplaysDataType")
+                .output()
+                .ok();
+
+            if let Ok(output) = metal_output {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains("Metal") {
+                    return Some(MetalInfo {
+                        version: "Supported".into(),
+                        xcode_version: None,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// 检测OneAPI/Intel运行环境
+    fn detect_oneapi() -> Option<OneApiInfo> {
+        // 检测dpcpp编译器
+        let dpcpp_version = std::process::Command::new("dpcpp")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.lines().next().map(|l| l.trim().to_string())
+            });
+
+        if dpcpp_version.is_some() {
+            return Some(OneApiInfo {
+                version: "Unknown".into(),
+                dpcpp_version,
+            });
+        }
+
+        None
+    }
+
+    /// 检测Vulkan SDK版本
+    fn detect_vulkan_sdk() -> Option<String> {
+        std::env::var("VULKAN_SDK")
+            .ok()
+            .and_then(|path| {
+                // 尝试从路径中提取版本
+                let path = std::path::Path::new(&path);
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
     }
 
     fn detect_os() -> OsInfo {
@@ -333,11 +533,6 @@ impl Environment {
             .to_string()
     }
 
-    /// Recommend layer offloading based on available GPU VRAM.
-    ///
-    /// # Note
-    /// This only considers the first detected GPU. Multi-GPU setups
-    /// are not yet supported.
     pub fn recommend_offload(&self, total_layers: u32) -> OffloadRecommendation {
         if let Some(gpu) = self.gpus.first() {
             let total_vram_gb = gpu.vram_mb as f32 / 1024.0;
