@@ -125,8 +125,11 @@ impl AnimateTheme {
         // 设置文本编辑框样式
         visuals.widgets.noninteractive.bg_fill = self.background_color;
         visuals.widgets.inactive.bg_fill = self.background_color;
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.text_color);
         visuals.widgets.hovered.bg_fill = self.background_color;
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.text_color);
         visuals.widgets.active.bg_fill = self.background_color;
+        visuals.widgets.active.fg_stroke = Stroke::new(1.0, self.text_color);
 
         style.visuals = visuals;
 

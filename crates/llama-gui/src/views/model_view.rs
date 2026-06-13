@@ -368,38 +368,40 @@ impl ModelView {
             });
         } else {
             ui.horizontal(|ui| {
-                ui.colored_label(egui::Color32::YELLOW, "●");
-                ui.label("当前模型未检测到MTP支持（可手动启用）");
+                ui.colored_label(egui::Color32::GRAY, "●");
+                ui.label("当前模型未检测到MTP支持");
             });
         }
         
-        ui.add_enabled(!self.model_selected() || self.model_supports_mtp, 
+        // 只有检测到支持MTP时才能启用
+        ui.add_enabled(self.model_supports_mtp, 
             egui::Checkbox::new(&mut self.params.mtp_enabled, "启用 MTP"));
         
-        let mtp_enabled = self.params.mtp_enabled && (self.model_supports_mtp || !self.model_selected());
-        
-        ui.horizontal(|ui| {
-            ui.label("N Predict:");
-            ui.add_enabled(mtp_enabled, 
-                egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true));
-            ui.label("(每次预测的token数)");
-        });
-        ui.horizontal(|ui| {
-            ui.label("Vocab Size:");
-            ui.add_enabled(mtp_enabled,
-                egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
-                    .step_by(1000.0)
-                    .show_value(true));
-            ui.label("(词表大小)");
-        });
-        ui.horizontal(|ui| {
-            ui.label("Embedding:");
-            ui.add_enabled(mtp_enabled,
-                egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
-                    .step_by(256.0)
-                    .show_value(true));
-            ui.label("(嵌入维度)");
-        });
+        // 只有启用MTP时才显示参数
+        if self.params.mtp_enabled && self.model_supports_mtp {
+            ui.horizontal(|ui| {
+                ui.label("N Predict:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true));
+                ui.label("(每次预测的token数)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Vocab Size:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
+                        .step_by(1000.0)
+                        .show_value(true));
+                ui.label("(词表大小)");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Embedding:");
+                ui.add(
+                    egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
+                        .step_by(256.0)
+                        .show_value(true));
+                ui.label("(嵌入维度)");
+            });
+        }
 
         // Status message
         if !self.status_message.is_empty() {

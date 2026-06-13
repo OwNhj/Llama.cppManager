@@ -300,57 +300,39 @@ impl Environment {
 
         // 方法2: 如果nvidia-smi失败，尝试使用PowerShell检测
         if gpus.is_empty() {
+            // 使用PowerShell的ConvertTo-Json输出，更容易解析
             if let Ok(output) = std::process::Command::new("powershell")
-                .args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | Format-Table -AutoSize"])
+                .args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | ConvertTo-Json"])
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = stdout.lines().collect();
                 
-                // 找到数据开始的行（跳过分隔线）
-                let mut data_start = 0;
-                for (i, line) in lines.iter().enumerate() {
-                    let line = line.trim();
-                    if line.starts_with("---") || line.is_empty() || line.contains("Name") {
-                        continue;
-                    }
-                    if !line.is_empty() && i > 0 {
-                        data_start = i;
-                        break;
-                    }
-                }
-                
-                for line in &lines[data_start..] {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with("---") {
-                        continue;
-                    }
+                // 尝试解析JSON输出
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    // 可能是单个对象或数组
+                    let gpu_list = if json.is_array() {
+                        json.as_array().unwrap_or(&vec![]).clone()
+                    } else {
+                        vec![json.clone()]
+                    };
                     
-                    // PowerShell输出格式: Name  AdapterRAM  DriverVersion
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        // 找到GPU名称（通常是第一个部分，直到遇到数字）
-                        let mut name_parts = Vec::new();
-                        let mut vram_mb: u64 = 0;
-                        let mut driver_version = "Unknown".to_string();
+                    for gpu_json in &gpu_list {
+                        let name = gpu_json.get("Name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown GPU")
+                            .to_string();
                         
-                        for (i, part) in parts.iter().enumerate() {
-                            if let Ok(vram) = part.parse::<u64>() {
-                                // 这是AdapterRAM（字节）
-                                vram_mb = vram / 1024 / 1024;
-                                // 后面的是DriverVersion
-                                if i + 1 < parts.len() {
-                                    driver_version = parts[i + 1..].join(" ");
-                                }
-                                break;
-                            } else {
-                                name_parts.push(*part);
-                            }
-                        }
+                        let vram_bytes = gpu_json.get("AdapterRAM")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let vram_mb = vram_bytes / 1024 / 1024;
                         
-                        let name = name_parts.join(" ");
+                        let driver_version = gpu_json.get("DriverVersion")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
                         
-                        if name.is_empty() {
+                        if name.is_empty() || name == "Unknown GPU" {
                             continue;
                         }
 
@@ -359,7 +341,8 @@ impl Environment {
                         } else if name.to_lowercase().contains("amd") 
                             || name.to_lowercase().contains("radeon") 
                             || name.to_lowercase().contains("rx")
-                            || name.to_lowercase().contains("vega") {
+                            || name.to_lowercase().contains("vega")
+                            || name.to_lowercase().contains("9070") {
                             (GpuBackend::Rocm, "Unknown".to_string())
                         } else if name.to_lowercase().contains("intel") 
                             || name.to_lowercase().contains("arc") {
@@ -371,7 +354,7 @@ impl Environment {
                         gpus.push(GpuInfo {
                             name,
                             vram_mb,
-                            available_vram_mb: vram_mb, // 假设全部可用
+                            available_vram_mb: vram_mb,
                             backend,
                             driver_version,
                             compute_capability,
