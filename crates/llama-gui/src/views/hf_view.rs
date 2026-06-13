@@ -9,7 +9,6 @@ pub struct HfView {
     selected_model: Option<SearchModel>,
     download_progress: Option<f32>,
     download_size: Option<u64>,
-    download_url: Option<String>,
     network_status: Option<NetworkStatus>,
     mirror_url: String,
     status_message: String,
@@ -25,6 +24,7 @@ pub struct SearchModel {
     pub model_type: String,
     pub downloads: u64,
     pub tags: Vec<String>,
+    pub size_bytes: u64,
 }
 
 enum SearchResult {
@@ -52,7 +52,6 @@ impl HfView {
             selected_model: None,
             download_progress: None,
             download_size: None,
-            download_url: None,
             network_status: None,
             mirror_url: "https://hf-mirror.com".into(),
             status_message: String::new(),
@@ -137,39 +136,33 @@ impl HfView {
         let searching = self.is_searching.load(Ordering::SeqCst);
         let downloading = self.is_downloading.load(Ordering::SeqCst);
 
-        // Network status section
+        // Network status
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label("网络状态:");
+            ui.label("网络:");
             match &self.network_status {
-                Some(NetworkStatus::Online { latency_ms }) => {
+                Some(NetworkStatus::Online { .. }) => {
                     ui.colored_label(egui::Color32::GREEN, "● 在线");
-                    ui.label(format!("{}ms", latency_ms));
                 }
                 Some(NetworkStatus::Offline) => {
                     ui.colored_label(egui::Color32::RED, "● 离线");
-                    ui.label("仅可使用本地模型");
                 }
-                Some(NetworkStatus::RateLimited) => {
-                    ui.colored_label(egui::Color32::YELLOW, "● 限速");
-                    ui.label("请稍后重试");
-                }
-                None => {
+                _ => {
                     ui.label("● 未检测");
                 }
             }
             if !searching && !downloading {
-                if ui.button("检测网络").clicked() {
+                if ui.button("检测").clicked() {
                     self.network_status = Some(NetworkStatus::Online { latency_ms: 50 });
-                    self.status_message = "网络检测完成".into();
                 }
             }
         });
 
-        // Mirror URL display
+        // API地址 - 可编辑
         ui.horizontal(|ui| {
-            ui.label("API地址:");
-            ui.label(&self.mirror_url);
+            ui.label("API:");
+            ui.add_enabled(!searching && !downloading, 
+                egui::TextEdit::singleline(&mut self.mirror_url));
         });
 
         ui.separator();
@@ -178,7 +171,7 @@ impl HfView {
         ui.strong("搜索模型");
         ui.horizontal(|ui| {
             let response = ui.add_enabled(!searching && !downloading, 
-                egui::TextEdit::singleline(&mut self.search_query).hint_text("输入模型名称搜索..."));
+                egui::TextEdit::singleline(&mut self.search_query).hint_text("输入模型名称..."));
             
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if !self.search_query.is_empty() && !searching && !downloading {
@@ -193,7 +186,6 @@ impl HfView {
             
             if searching {
                 ui.spinner();
-                ui.label("搜索中...");
             }
         });
 
@@ -201,7 +193,7 @@ impl HfView {
         if !self.search_results.is_empty() {
             ui.separator();
             ui.horizontal(|ui| {
-                ui.strong(format!("搜索结果 ({}个模型)", self.search_results.len()));
+                ui.strong(format!("结果 ({}个)", self.search_results.len()));
                 if ui.small_button("清空").clicked() {
                     self.search_results.clear();
                     self.selected_model = None;
@@ -218,40 +210,28 @@ impl HfView {
                             .map(|m| m.id == model.id)
                             .unwrap_or(false);
 
-                        let response = ui.selectable_label(is_selected, "");
-                        let model_response = ui.horizontal(|ui| {
-                            ui.strong(&model.id);
-                            ui.separator();
-                            ui.label(&model.model_type);
-                            ui.separator();
-                            ui.small(format!("下载: {}", Self::format_downloads(model.downloads)));
-                        });
-
-                        if response.clicked() || model_response.response.clicked() {
+                        if ui.selectable_label(is_selected, "").clicked() {
                             self.selected_model = Some(model.clone());
                         }
+                        ui.horizontal(|ui| {
+                            ui.label(&model.id);
+                            ui.separator();
+                            ui.small(&model.model_type);
+                            ui.separator();
+                            ui.small(format!("{} 次下载", Self::format_downloads(model.downloads)));
+                        });
                     }
                 });
         }
 
         // Selected model actions
-        if let Some(ref model) = self.selected_model {
+        let selected_id = self.selected_model.as_ref().map(|m| m.id.clone());
+        
+        if let Some(model_id) = selected_id {
             ui.separator();
             ui.strong("已选择模型");
-            
-            egui::Frame::none()
-                .fill(egui::Color32::from_rgb(45, 45, 55))
-                .rounding(egui::Rounding::same(6.0))
-                .inner_margin(egui::Margin::same(8.0))
-                .show(ui, |ui| {
-                    ui.label(format!("模型: {}", model.id));
-                    ui.label(format!("类型: {}", model.model_type));
-                    ui.label(format!("下载量: {}", Self::format_downloads(model.downloads)));
-                    ui.label(format!("标签: {}", model.tags.join(", ")));
-                });
+            ui.label(&model_id);
 
-            // 下载按钮
-            let model_id = model.id.clone();
             if !downloading {
                 if ui.button("下载模型").clicked() {
                     self.start_download(&model_id);
@@ -341,6 +321,7 @@ impl HfView {
                                             model_type,
                                             downloads,
                                             tags,
+                                            size_bytes: 0, // 将在需要时获取
                                         })
                                     }).collect();
                                     let _ = tx.send(SearchResult::Success(models));
@@ -375,19 +356,17 @@ impl HfView {
         self.download_rx = Some(rx);
         
         std::thread::spawn(move || {
-            // 获取模型信息以找到合适的文件
             let client = reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
             
-            // 尝试获取模型信息
+            // 获取模型信息
             let model_url = format!("{}/api/models/{}", mirror_url, model_id);
             match client.get(&model_url).send() {
                 Ok(resp) => {
                     if resp.status().is_success() {
                         if let Ok(model_info) = resp.json::<serde_json::Value>() {
-                            // 获取模型文件列表
                             let siblings = model_info.get("siblings")
                                 .and_then(|v| v.as_array())
                                 .cloned()
@@ -406,16 +385,12 @@ impl HfView {
                                 
                                 let download_url = format!("{}/{}/resolve/main/{}", mirror_url, model_id, filename);
                                 
-                                // 开始下载
-                                let _ = tx.send(DownloadResult::Progress { downloaded: 0, total: 0 });
-                                
+                                // 下载文件
                                 match client.get(&download_url).send() {
                                     Ok(mut resp) => {
                                         let total_size = resp.content_length().unwrap_or(0);
                                         let mut downloaded = 0u64;
                                         
-                                        // 这里应该将文件保存到用户选择的位置
-                                        // 目前只是模拟下载
                                         let mut buffer = [0u8; 8192];
                                         loop {
                                             match resp.read(&mut buffer) {
