@@ -8,6 +8,8 @@ pub struct ChatView {
     model_name: Option<String>,
     is_generating: bool,
     params: ModelParams,
+    is_gguf: bool,
+    server_running: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,27 +41,51 @@ impl ChatView {
             model_name: None,
             is_generating: false,
             params: ModelParams::default(),
+            is_gguf: false,
+            server_running: false,
         }
     }
 
     /// 设置模型信息
-    pub fn set_model_loaded(&mut self, name: &str, params: ModelParams) {
+    pub fn set_model_loaded(&mut self, name: &str, params: ModelParams, is_gguf: bool) {
         self.model_loaded = true;
         self.model_name = Some(name.to_string());
         self.params = params;
+        self.is_gguf = is_gguf;
         
-        // 添加系统消息
-        self.messages.push(ChatMessage {
-            role: MessageRole::System,
-            content: format!("模型 {} 已加载。开始对话吧！", name),
-            timestamp: Self::current_time(),
-        });
+        if is_gguf {
+            self.messages.push(ChatMessage {
+                role: MessageRole::System,
+                content: format!("模型 {} 已加载。请点击\"启动服务器\"开始对话。", name),
+                timestamp: Self::current_time(),
+            });
+        } else {
+            self.messages.push(ChatMessage {
+                role: MessageRole::System,
+                content: format!("模型 {} 是非GGUF格式，需要先导出为GGUF格式才能使用对话功能。", name),
+                timestamp: Self::current_time(),
+            });
+        }
+    }
+
+    /// 设置服务器状态
+    pub fn set_server_running(&mut self, running: bool) {
+        self.server_running = running;
+        if running {
+            self.messages.push(ChatMessage {
+                role: MessageRole::System,
+                content: "服务器已启动，可以开始对话。".into(),
+                timestamp: Self::current_time(),
+            });
+        }
     }
 
     /// 清除模型信息
     pub fn clear_model(&mut self) {
         self.model_loaded = false;
         self.model_name = None;
+        self.is_gguf = false;
+        self.server_running = false;
         self.messages.clear();
         self.input_text.clear();
     }
@@ -77,7 +103,7 @@ impl ChatView {
 
     /// 发送消息
     fn send_message(&mut self) {
-        if self.input_text.trim().is_empty() || !self.model_loaded {
+        if self.input_text.trim().is_empty() || !self.model_loaded || !self.server_running {
             return;
         }
 
@@ -120,16 +146,36 @@ impl ChatView {
             return;
         }
 
+        // 检查是否是GGUF格式
+        if !self.is_gguf {
+            ui.separator();
+            ui.colored_label(egui::Color32::YELLOW, "⚠ 当前模型不是GGUF格式");
+            ui.label("对话功能仅支持GGUF格式模型。");
+            ui.label("请先导出模型为GGUF格式，或加载已有的GGUF模型。");
+            return;
+        }
+
         // 模型信息
         if let Some(ref name) = self.model_name {
             ui.horizontal(|ui| {
                 ui.label("当前模型:");
                 ui.strong(name);
                 ui.separator();
-                ui.label(format!("Temperature: {:.2}", self.params.temperature));
+                ui.label(format!("Temp: {:.2}", self.params.temperature));
                 ui.separator();
                 ui.label(format!("Top-P: {:.2}", self.params.top_p));
             });
+        }
+
+        // 服务器状态
+        if !self.server_running {
+            ui.separator();
+            ui.colored_label(egui::Color32::YELLOW, "⚠ 服务器未运行");
+            ui.label("请点击下方按钮启动llama-server");
+            if ui.button("启动服务器").clicked() {
+                self.set_server_running(true);
+            }
+            return;
         }
 
         ui.separator();

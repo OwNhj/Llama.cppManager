@@ -50,6 +50,11 @@ impl ModelView {
         &self.params
     }
 
+    /// 检查当前模型是否是GGUF格式
+    pub fn is_current_model_gguf(&self) -> bool {
+        self.model_info.as_ref().map(|m| m.format.is_gguf()).unwrap_or(false)
+    }
+
     /// 检查是否已选择模型
     pub fn model_selected(&self) -> bool {
         self.selected_path.is_some()
