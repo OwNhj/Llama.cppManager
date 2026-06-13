@@ -1,10 +1,30 @@
 use eframe::egui;
 
+/// 应用程序设置
+#[derive(Debug, Clone)]
+pub struct AppSettings {
+    pub theme: Theme,
+    pub font_size: f32,
+    pub background_color: [f32; 3],
+    pub hf_mirror_url: String,
+    pub hf_api_timeout: u32,
+    pub hf_auto_export: bool,
+    pub default_quant_type: String,
+    pub auto_estimate_size: bool,
+    pub default_offload_mode: String,
+    pub auto_recommend: bool,
+    pub mtp_enabled: bool,
+    pub mtp_n_predict: u32,
+    pub mtp_n_vocab: u32,
+    pub mtp_n_embd: u32,
+}
+
 pub struct SettingsView {
     // 界面设置
     theme: Theme,
     font_size: f32,
     language: Language,
+    background_color: [f32; 3],
 
     // HuggingFace设置
     hf_mirror_url: String,
@@ -19,6 +39,12 @@ pub struct SettingsView {
     default_offload_mode: String,
     auto_recommend: bool,
 
+    // MTP设置
+    mtp_enabled: bool,
+    mtp_n_predict: u32,
+    mtp_n_vocab: u32,
+    mtp_n_embd: u32,
+
     // 日志设置
     log_level: LogLevel,
     show_log_panel: bool,
@@ -26,7 +52,7 @@ pub struct SettingsView {
     status_message: String,
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Clone, Copy, Debug)]
 enum Theme {
     Light,
     Dark,
@@ -59,6 +85,7 @@ impl SettingsView {
             theme: Theme::System,
             font_size: 14.0,
             language: Language::Chinese,
+            background_color: [0.1, 0.1, 0.1],
             hf_mirror_url: "https://hf-mirror.com".into(),
             hf_api_timeout: 30,
             hf_auto_export: true,
@@ -66,9 +93,33 @@ impl SettingsView {
             auto_estimate_size: true,
             default_offload_mode: "Auto".into(),
             auto_recommend: true,
+            mtp_enabled: false,
+            mtp_n_predict: 1,
+            mtp_n_vocab: 32000,
+            mtp_n_embd: 4096,
             log_level: LogLevel::Info,
             show_log_panel: false,
             status_message: String::new(),
+        }
+    }
+
+    /// 获取当前设置
+    pub fn get_settings(&self) -> AppSettings {
+        AppSettings {
+            theme: self.theme.clone(),
+            font_size: self.font_size,
+            background_color: self.background_color,
+            hf_mirror_url: self.hf_mirror_url.clone(),
+            hf_api_timeout: self.hf_api_timeout,
+            hf_auto_export: self.hf_auto_export,
+            default_quant_type: self.default_quant_type.clone(),
+            auto_estimate_size: self.auto_estimate_size,
+            default_offload_mode: self.default_offload_mode.clone(),
+            auto_recommend: self.auto_recommend,
+            mtp_enabled: self.mtp_enabled,
+            mtp_n_predict: self.mtp_n_predict,
+            mtp_n_vocab: self.mtp_n_vocab,
+            mtp_n_embd: self.mtp_n_embd,
         }
     }
 
@@ -175,6 +226,32 @@ impl SettingsView {
                     ui.checkbox(&mut self.auto_recommend, "根据GPU显存自动推荐Offload配置");
                     ui.end_row();
                 });
+            });
+
+            // MTP设置
+            ui.separator();
+            ui.collapsing("MTP 设置 (Multi-Token Prediction)", |ui| {
+                egui::Grid::new("mtp_settings_grid").striped(true).show(ui, |ui| {
+                    ui.label("启用MTP:");
+                    ui.checkbox(&mut self.mtp_enabled, "启用多Token预测");
+                    ui.end_row();
+
+                    if self.mtp_enabled {
+                        ui.label("N Predict:");
+                        ui.add(egui::Slider::new(&mut self.mtp_n_predict, 1..=8).suffix(" tokens"));
+                        ui.end_row();
+
+                        ui.label("词表大小:");
+                        ui.add(egui::Slider::new(&mut self.mtp_n_vocab, 1000..=256000).step_by(1000.0));
+                        ui.end_row();
+
+                        ui.label("嵌入维度:");
+                        ui.add(egui::Slider::new(&mut self.mtp_n_embd, 256..=16384).step_by(256.0));
+                        ui.end_row();
+                    }
+                });
+
+                ui.label("MTP允许模型一次预测多个token，提高推理速度");
             });
 
             // 日志设置

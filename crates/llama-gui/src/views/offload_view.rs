@@ -6,6 +6,7 @@ pub struct OffloadView {
     config: OffloadConfig,
     total_layers: u32,
     model_name: Option<String>,
+    edit_total_layers: bool,
 }
 
 impl Default for OffloadView {
@@ -20,6 +21,7 @@ impl OffloadView {
             config: OffloadConfig::default(),
             total_layers: 32,
             model_name: None,
+            edit_total_layers: false,
         }
     }
 
@@ -51,7 +53,20 @@ impl OffloadView {
                 ui.label("当前模型:");
                 ui.strong(name);
                 ui.separator();
-                ui.label(format!("总层数: {}", self.total_layers));
+                if self.edit_total_layers {
+                    ui.label("总层数:");
+                    ui.add(egui::Slider::new(&mut self.total_layers, 1..=200));
+                    if ui.button("确认").clicked() {
+                        self.edit_total_layers = false;
+                        // 重置配置
+                        self.config.layers.clear();
+                    }
+                } else {
+                    ui.label(format!("总层数: {}", self.total_layers));
+                    if ui.small_button("编辑").clicked() {
+                        self.edit_total_layers = true;
+                    }
+                }
             });
         } else {
             ui.label("请先在首页选择模型");
