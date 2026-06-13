@@ -24,6 +24,18 @@ impl EnvView {
         }
     }
 
+    /// 启动时自动检测环境
+    pub fn auto_detect(&mut self) {
+        self.env = Some(Environment::detect());
+        self.last_refresh = std::time::Instant::now();
+    }
+
+    /// 手动刷新环境检测
+    pub fn refresh(&mut self) {
+        self.env = Some(Environment::detect());
+        self.last_refresh = std::time::Instant::now();
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("运行环境检测");
 
