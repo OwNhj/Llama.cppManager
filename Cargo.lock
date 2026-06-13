@@ -2109,6 +2109,7 @@ dependencies = [
  "egui",
  "llama-core",
  "llama-server",
+ "reqwest",
  "rfd",
  "serde_json",
  "tracing",
