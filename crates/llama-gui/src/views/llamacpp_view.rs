@@ -1,38 +1,71 @@
 use eframe::egui;
 use llama_core::environment::Environment;
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
 
 pub struct LlamaCppView {
     installed: bool,
     version: Option<String>,
-    download_progress: Option<f32>,
-    is_downloading: bool,
-    is_compiling: bool,
-    compile_options: CompileOptions,
-    status_message: String,
     install_path: Option<String>,
+    
+    is_downloading: Arc<AtomicBool>,
+    is_compiling: Arc<AtomicBool>,
+    download_progress: f32,
+    compile_progress: f32,
+    status_message: String,
+    log_output: Arc<Mutex<Vec<String>>>,
+    
+    backend: Backend,
+    cpu_optimization: CpuOptimization,
+    
+    download_rx: Option<std::sync::mpsc::Receiver<InstallResult>>,
+    compile_rx: Option<std::sync::mpsc::Receiver<InstallResult>>,
 }
 
-#[derive(Debug, Clone)]
-pub struct CompileOptions {
-    pub backend: String,
-    pub enable_avx2: bool,
-    pub enable_avx512: bool,
-    pub enable_vulkan: bool,
-    pub enable_cuda: bool,
-    pub enable_rocm: bool,
+#[derive(Debug, Clone, PartialEq)]
+pub enum Backend {
+    Cpu,
+    Cuda,
+    Rocm,
+    Vulkan,
+    Metal,
+    Openblas,
 }
 
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self {
-            backend: "CPU".into(),
-            enable_avx2: true,
-            enable_avx512: false,
-            enable_vulkan: false,
-            enable_cuda: false,
-            enable_rocm: false,
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backend::Cpu => write!(f, "CPU"),
+            Backend::Cuda => write!(f, "CUDA"),
+            Backend::Rocm => write!(f, "ROCm"),
+            Backend::Vulkan => write!(f, "Vulkan"),
+            Backend::Metal => write!(f, "Metal"),
+            Backend::Openblas => write!(f, "OpenBLAS"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CpuOptimization {
+    None,
+    Avx2,
+    Avx512,
+}
+
+impl std::fmt::Display for CpuOptimization {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CpuOptimization::None => write!(f, "无优化"),
+            CpuOptimization::Avx2 => write!(f, "AVX2"),
+            CpuOptimization::Avx512 => write!(f, "AVX-512"),
+        }
+    }
+}
+
+enum InstallResult {
+    Log(String),
+    Progress(f32),
+    Complete(String),
+    Error(String),
 }
 
 impl Default for LlamaCppView {
@@ -46,16 +79,20 @@ impl LlamaCppView {
         Self {
             installed: false,
             version: None,
-            download_progress: None,
-            is_downloading: false,
-            is_compiling: false,
-            compile_options: CompileOptions::default(),
-            status_message: String::new(),
             install_path: None,
+            is_downloading: Arc::new(AtomicBool::new(false)),
+            is_compiling: Arc::new(AtomicBool::new(false)),
+            download_progress: 0.0,
+            compile_progress: 0.0,
+            status_message: String::new(),
+            log_output: Arc::new(Mutex::new(Vec::new())),
+            backend: Backend::Cpu,
+            cpu_optimization: CpuOptimization::Avx2,
+            download_rx: None,
+            compile_rx: None,
         }
     }
 
-    /// 从环境检测中更新状态
     pub fn update_from_env(&mut self, env: &Environment) {
         self.installed = env.llama_cpp.installed;
         self.version = env.llama_cpp.version.clone();
@@ -64,6 +101,8 @@ impl LlamaCppView {
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("llama.cpp 管理");
+
+        self.check_results();
 
         // 安装状态
         ui.separator();
@@ -78,78 +117,85 @@ impl LlamaCppView {
             }
         } else {
             ui.colored_label(egui::Color32::YELLOW, "● 未检测到 llama.cpp");
-            ui.label("请下载并编译 llama.cpp");
         }
 
         ui.separator();
 
-        // 下载和编译选项
-        ui.strong("安装 llama.cpp");
-        
-        if self.is_downloading {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("下载中...");
-            });
-            if let Some(progress) = self.download_progress {
-                ui.add(egui::ProgressBar::new(progress).text(format!("{:.0}%", progress * 100.0)));
-            }
-        } else if self.is_compiling {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("编译中...");
-            });
-        } else {
-            // 编译选项
-            ui.label("选择编译选项:");
-            
-            egui::Grid::new("compile_options").striped(true).show(ui, |ui| {
-                ui.label("后端:");
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(self.compile_options.backend == "CPU", "CPU").clicked() {
-                        self.compile_options.backend = "CPU".into();
-                        self.compile_options.enable_cuda = false;
-                        self.compile_options.enable_rocm = false;
-                        self.compile_options.enable_vulkan = false;
-                    }
-                    if ui.selectable_label(self.compile_options.backend == "CUDA", "CUDA").clicked() {
-                        self.compile_options.backend = "CUDA".into();
-                        self.compile_options.enable_cuda = true;
-                        self.compile_options.enable_rocm = false;
-                        self.compile_options.enable_vulkan = false;
-                    }
-                    if ui.selectable_label(self.compile_options.backend == "ROCm", "ROCm").clicked() {
-                        self.compile_options.backend = "ROCm".into();
-                        self.compile_options.enable_cuda = false;
-                        self.compile_options.enable_rocm = true;
-                        self.compile_options.enable_vulkan = false;
-                    }
-                    if ui.selectable_label(self.compile_options.backend == "Vulkan", "Vulkan").clicked() {
-                        self.compile_options.backend = "Vulkan".into();
-                        self.compile_options.enable_cuda = false;
-                        self.compile_options.enable_rocm = false;
-                        self.compile_options.enable_vulkan = true;
-                    }
-                });
-                ui.end_row();
-                
-                ui.label("CPU优化:");
-                ui.checkbox(&mut self.compile_options.enable_avx2, "AVX2");
-                ui.checkbox(&mut self.compile_options.enable_avx512, "AVX-512");
-                ui.end_row();
-            });
+        let is_busy = self.is_downloading.load(Ordering::SeqCst) || 
+                      self.is_compiling.load(Ordering::SeqCst);
 
+        // 编译选项
+        ui.strong("编译选项");
+        
+        ui.horizontal(|ui| {
+            ui.label("计算后端:");
+            for backend in [Backend::Cpu, Backend::Cuda, Backend::Rocm, Backend::Vulkan, Backend::Metal, Backend::Openblas] {
+                if ui.selectable_label(self.backend == backend, backend.to_string()).clicked() && !is_busy {
+                    self.backend = backend;
+                }
+            }
+        });
+
+        if self.backend == Backend::Cpu {
+            ui.horizontal(|ui| {
+                ui.label("CPU优化:");
+                for opt in [CpuOptimization::None, CpuOptimization::Avx2, CpuOptimization::Avx512] {
+                    if ui.selectable_label(self.cpu_optimization == opt, opt.to_string()).clicked() && !is_busy {
+                        self.cpu_optimization = opt;
+                    }
+                }
+            });
+            ui.small("AVX-512 包含 AVX2，选择 AVX-512 时自动启用 AVX2");
+        }
+
+        ui.separator();
+
+        // 操作按钮
+        if is_busy {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                if self.is_downloading.load(Ordering::SeqCst) {
+                    ui.label("下载中...");
+                } else if self.is_compiling.load(Ordering::SeqCst) {
+                    ui.label("编译中...");
+                }
+            });
+            
+            if self.is_downloading.load(Ordering::SeqCst) {
+                ui.add(egui::ProgressBar::new(self.download_progress)
+                    .text(format!("下载: {:.0}%", self.download_progress * 100.0)));
+            }
+            if self.is_compiling.load(Ordering::SeqCst) {
+                ui.add(egui::ProgressBar::new(self.compile_progress)
+                    .text(format!("编译: {:.0}%", self.compile_progress * 100.0)));
+            }
+        } else {
             ui.horizontal(|ui| {
                 if ui.button("下载并编译").clicked() {
-                    self.start_install();
+                    self.start_full_install();
                 }
                 if ui.button("仅下载源码").clicked() {
                     self.start_download_only();
                 }
+                if ui.button("仅编译").clicked() {
+                    self.start_compile_only();
+                }
             });
         }
 
-        // 状态消息
+        // 日志输出
+        ui.separator();
+        ui.strong("输出日志");
+        egui::ScrollArea::vertical()
+            .max_height(200.0)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                let logs = self.log_output.lock().unwrap();
+                for line in logs.iter() {
+                    ui.label(egui::RichText::new(line).small().monospace());
+                }
+            });
+
         if !self.status_message.is_empty() {
             ui.separator();
             ui.horizontal(|ui| {
@@ -161,56 +207,266 @@ impl LlamaCppView {
         }
     }
 
+    fn check_results(&mut self) {
+        if let Some(rx) = self.download_rx.take() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        InstallResult::Log(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
+                        }
+                        InstallResult::Progress(p) => {
+                            self.download_progress = p;
+                        }
+                        InstallResult::Complete(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
+                            self.is_downloading.store(false, Ordering::SeqCst);
+                            self.status_message = "下载完成".into();
+                        }
+                        InstallResult::Error(e) => {
+                            self.log_output.lock().unwrap().push(format!("错误: {}", e));
+                            self.is_downloading.store(false, Ordering::SeqCst);
+                            self.status_message = format!("下载失败: {}", e);
+                        }
+                    }
+                    self.download_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.download_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.is_downloading.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+
+        if let Some(rx) = self.compile_rx.take() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        InstallResult::Log(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
+                        }
+                        InstallResult::Progress(p) => {
+                            self.compile_progress = p;
+                        }
+                        InstallResult::Complete(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
+                            self.is_compiling.store(false, Ordering::SeqCst);
+                            self.installed = true;
+                            self.status_message = "编译完成".into();
+                        }
+                        InstallResult::Error(e) => {
+                            self.log_output.lock().unwrap().push(format!("错误: {}", e));
+                            self.is_compiling.store(false, Ordering::SeqCst);
+                            self.status_message = format!("编译失败: {}", e);
+                        }
+                    }
+                    self.compile_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.compile_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.is_compiling.store(false, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+
     fn start_download_only(&mut self) {
-        self.is_downloading = true;
-        self.download_progress = Some(0.0);
-        self.status_message = "开始下载 llama.cpp 源码...".into();
+        self.is_downloading.store(true, Ordering::SeqCst);
+        self.download_progress = 0.0;
+        self.log_output.lock().unwrap().clear();
+        self.status_message = "开始下载 llama.cpp...".into();
         
-        // 在后台线程下载
-        std::thread::spawn(|| {
-            // 模拟下载过程
-            std::thread::sleep(std::time::Duration::from_secs(2));
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.download_rx = Some(rx);
+        
+        std::thread::spawn(move || {
+            let _ = tx.send(InstallResult::Log("开始克隆 llama.cpp 仓库...".into()));
+            let _ = tx.send(InstallResult::Progress(0.1));
+            
+            let output = std::process::Command::new("git")
+                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", "llama.cpp"])
+                .output();
+            
+            match output {
+                Ok(out) => {
+                    if out.status.success() {
+                        let _ = tx.send(InstallResult::Progress(1.0));
+                        let _ = tx.send(InstallResult::Complete("下载完成".into()));
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let _ = tx.send(InstallResult::Error(stderr.to_string()));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(InstallResult::Error(format!("执行git失败: {}", e)));
+                }
+            }
         });
     }
 
-    fn start_install(&mut self) {
-        self.is_downloading = true;
-        self.download_progress = Some(0.0);
+    fn start_compile_only(&mut self) {
+        self.is_compiling.store(true, Ordering::SeqCst);
+        self.compile_progress = 0.0;
+        self.log_output.lock().unwrap().clear();
+        self.status_message = "开始编译 llama.cpp...".into();
+        
+        let backend = self.backend.clone();
+        let cpu_opt = self.cpu_optimization.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.compile_rx = Some(rx);
+        
+        std::thread::spawn(move || {
+            Self::compile_llamacpp(&backend, &cpu_opt, &tx);
+        });
+    }
+
+    fn start_full_install(&mut self) {
+        self.is_downloading.store(true, Ordering::SeqCst);
+        self.download_progress = 0.0;
+        self.log_output.lock().unwrap().clear();
         self.status_message = "开始下载并编译 llama.cpp...".into();
         
-        let options = self.compile_options.clone();
+        let backend = self.backend.clone();
+        let cpu_opt = self.cpu_optimization.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // 只使用compile_rx来接收所有结果
+        self.compile_rx = Some(rx);
+        
         std::thread::spawn(move || {
-            // 模拟下载和编译过程
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            let _ = tx.send(InstallResult::Log("开始克隆 llama.cpp 仓库...".into()));
+            let _ = tx.send(InstallResult::Progress(0.1));
             
-            // 根据选项执行不同的编译命令
-            let cmake_args = Self::build_cmake_args(&options);
-            let _ = cmake_args; // 使用编译参数
+            let output = std::process::Command::new("git")
+                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", "llama.cpp"])
+                .output();
+            
+            match output {
+                Ok(out) => {
+                    if out.status.success() {
+                        let _ = tx.send(InstallResult::Progress(0.5));
+                        let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
+                        Self::compile_llamacpp(&backend, &cpu_opt, &tx);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let _ = tx.send(InstallResult::Error(format!("下载失败: {}", stderr)));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(InstallResult::Error(format!("执行git失败: {}", e)));
+                }
+            }
         });
     }
 
-    fn build_cmake_args(options: &CompileOptions) -> Vec<String> {
-        let mut args = vec!["-B".into(), "build".into()];
+    fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, tx: &std::sync::mpsc::Sender<InstallResult>) {
+        let _ = tx.send(InstallResult::Progress(0.6));
+        let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
-        // 后端选项
-        if options.enable_cuda {
-            args.push("-DGGML_CUDA=ON".into());
-        }
-        if options.enable_rocm {
-            args.push("-DGGML_HIP=ON".into());
-        }
-        if options.enable_vulkan {
-            args.push("-DGGML_VULKAN=ON".into());
+        let mut cmake_args: Vec<String> = vec![
+            "-B".into(), "build".into(), 
+            "-S".into(), "llama.cpp".into(),
+        ];
+        
+        match backend {
+            Backend::Cpu => {
+                match cpu_opt {
+                    CpuOptimization::Avx2 => {
+                        cmake_args.push("-DGGML_AVX2=ON".into());
+                        let _ = tx.send(InstallResult::Log("启用 AVX2 优化".into()));
+                    }
+                    CpuOptimization::Avx512 => {
+                        cmake_args.push("-DGGML_AVX512=ON".into());
+                        let _ = tx.send(InstallResult::Log("启用 AVX-512 优化".into()));
+                    }
+                    CpuOptimization::None => {}
+                }
+            }
+            Backend::Cuda => {
+                cmake_args.push("-DGGML_CUDA=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 CUDA 后端".into()));
+            }
+            Backend::Rocm => {
+                cmake_args.push("-DGGML_HIP=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 ROCm 后端".into()));
+            }
+            Backend::Vulkan => {
+                cmake_args.push("-DGGML_VULKAN=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 Vulkan 后端".into()));
+            }
+            Backend::Metal => {
+                cmake_args.push("-DGGML_METAL=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 Metal 后端".into()));
+            }
+            Backend::Openblas => {
+                cmake_args.push("-DGGML_BLAS=ON".into());
+                cmake_args.push("-DGGML_BLAS_VENDOR=OpenBLAS".into());
+                let _ = tx.send(InstallResult::Log("启用 OpenBLAS 后端".into()));
+            }
         }
         
-        // CPU优化
-        if options.enable_avx2 {
-            args.push("-DGGML_AVX2=ON".into());
-        }
-        if options.enable_avx512 {
-            args.push("-DGGML_AVX512=ON".into());
+        let _ = tx.send(InstallResult::Progress(0.7));
+        let _ = tx.send(InstallResult::Log(format!("执行: cmake {}", cmake_args.join(" "))));
+        
+        let output = std::process::Command::new("cmake")
+            .args(&cmake_args)
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                
+                for line in stdout.lines() {
+                    let _ = tx.send(InstallResult::Log(line.to_string()));
+                }
+                for line in stderr.lines() {
+                    let _ = tx.send(InstallResult::Log(format!("[stderr] {}", line)));
+                }
+                
+                if !out.status.success() {
+                    let _ = tx.send(InstallResult::Error(format!("cmake 配置失败: {}", stderr)));
+                    return;
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(InstallResult::Error(format!("执行cmake失败: {}", e)));
+                return;
+            }
         }
         
-        args
+        let _ = tx.send(InstallResult::Progress(0.8));
+        let _ = tx.send(InstallResult::Log("开始编译...".into()));
+        
+        let output = std::process::Command::new("cmake")
+            .args(["--build", "build", "--config", "Release"])
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                
+                for line in stdout.lines() {
+                    let _ = tx.send(InstallResult::Log(line.to_string()));
+                }
+                for line in stderr.lines() {
+                    let _ = tx.send(InstallResult::Log(format!("[stderr] {}", line)));
+                }
+                
+                if out.status.success() {
+                    let _ = tx.send(InstallResult::Progress(1.0));
+                    let _ = tx.send(InstallResult::Complete("编译完成!".into()));
+                } else {
+                    let _ = tx.send(InstallResult::Error(format!("编译失败: {}", stderr)));
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(InstallResult::Error(format!("执行编译失败: {}", e)));
+            }
+        }
     }
 }
