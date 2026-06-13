@@ -1,10 +1,11 @@
-use crate::views::{chat_view, env_view, hf_view, model_view, offload_view, quantize_view, settings_view};
+use crate::views::{chat_view, env_view, hf_view, llamacpp_view, model_view, offload_view, quantize_view, settings_view};
 use crate::theme::AnimateTheme;
 use eframe::egui;
 
 #[derive(PartialEq)]
 enum Tab {
     Home,
+    LlamaCpp,
     Chat,
     HuggingFace,
     Quantize,
@@ -15,6 +16,7 @@ enum Tab {
 pub struct App {
     current_tab: Tab,
     home_view: HomeView,
+    llamacpp_view: llamacpp_view::LlamaCppView,
     chat_view: chat_view::ChatView,
     hf_view: hf_view::HfView,
     quantize_view: quantize_view::QuantizeView,
@@ -42,9 +44,14 @@ impl HomeView {
 
 impl App {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let env = llama_core::environment::Environment::detect();
+        let mut llamacpp_view = llamacpp_view::LlamaCppView::new();
+        llamacpp_view.update_from_env(&env);
+        
         Self {
             current_tab: Tab::Home,
             home_view: HomeView::new(),
+            llamacpp_view,
             chat_view: chat_view::ChatView::new(),
             hf_view: hf_view::HfView::new(),
             quantize_view: quantize_view::QuantizeView::new(),
@@ -77,6 +84,9 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 if ui.selectable_label(self.current_tab == Tab::Home, "首页").clicked() {
                     self.current_tab = Tab::Home;
+                }
+                if ui.selectable_label(self.current_tab == Tab::LlamaCpp, "llama.cpp").clicked() {
+                    self.current_tab = Tab::LlamaCpp;
                 }
                 if ui.selectable_label(self.current_tab == Tab::Chat, "对话").clicked() {
                     self.current_tab = Tab::Chat;
@@ -134,6 +144,7 @@ impl eframe::App for App {
                             self.last_model_path = current_path;
                         }
                     }
+                    Tab::LlamaCpp => self.llamacpp_view.show(ui),
                     Tab::Chat => self.chat_view.show(ui),
                     Tab::HuggingFace => self.hf_view.show(ui),
                     Tab::Quantize => self.quantize_view.show(ui),
