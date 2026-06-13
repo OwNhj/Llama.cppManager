@@ -65,24 +65,19 @@ impl OffloadView {
         // 分离模式选择
         ui.label("分离模式:");
         ui.horizontal(|ui| {
-            if ui.button("普通模式").clicked() {
-                self.config.mode = OffloadMode::Normal;
-            }
-            if self.config.mode == OffloadMode::Normal {
-                ui.label("✓");
-            }
+            let modes = [
+                (OffloadMode::Normal, "普通模式"),
+                (OffloadMode::AfSeparation, "AF分离"),
+            ];
             
-            ui.separator();
-            
-            if ui.button("AF分离").clicked() {
-                self.config.mode = OffloadMode::AfSeparation;
-            }
-            if self.config.mode == OffloadMode::AfSeparation {
-                ui.label("✓");
+            for (mode, label) in modes {
+                let selected = self.config.mode == mode;
+                if ui.selectable_label(selected, label).clicked() {
+                    self.config.mode = mode;
+                }
             }
             
-            ui.separator();
-            
+            // PD分离不可用
             ui.add_enabled(false, egui::Button::new("PD分离 (开发中)"));
         });
 
@@ -91,9 +86,62 @@ impl OffloadView {
         // 根据模式显示不同配置
         match self.config.mode {
             OffloadMode::Normal => {
-                ui.strong("普通模式");
-                ui.label("所有层都运行在CPU上");
-                ui.label("适用于CPU推理或显存不足的情况");
+                ui.strong("层配置");
+                ui.label("GPU:0 / GPU:1 表示不同的GPU设备（如果有多块GPU）");
+                
+                ui.horizontal(|ui| {
+                    if ui.button("全部 GPU").clicked() {
+                        self.set_all_layers(DeviceType::Cuda(0));
+                    }
+                    if ui.button("全部 CPU").clicked() {
+                        self.set_all_layers(DeviceType::Cpu);
+                    }
+                    if ui.button("自动分配").clicked() {
+                        self.auto_assign_layers();
+                    }
+                });
+
+                ui.separator();
+
+                if self.total_layers > 0 {
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            for i in 0..self.total_layers {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Layer {}: ", i));
+                                    let current_device = self
+                                        .config
+                                        .layers
+                                        .iter()
+                                        .find(|l| l.layer_index == i)
+                                        .map(|l| l.device.clone())
+                                        .unwrap_or(DeviceType::Cpu);
+
+                                    if ui
+                                        .selectable_label(current_device == DeviceType::Cpu, "CPU")
+                                        .clicked()
+                                    {
+                                        self.set_layer_device(i, DeviceType::Cpu);
+                                    }
+                                    if ui
+                                        .selectable_label(current_device == DeviceType::Cuda(0), "GPU:0")
+                                        .clicked()
+                                    {
+                                        self.set_layer_device(i, DeviceType::Cuda(0));
+                                    }
+                                    if ui
+                                        .selectable_label(current_device == DeviceType::Cuda(1), "GPU:1")
+                                        .clicked()
+                                    {
+                                        self.set_layer_device(i, DeviceType::Cuda(1));
+                                    }
+                                });
+                            }
+                        });
+                } else {
+                    ui.label("请先加载模型以获取层数信息");
+                }
             }
             OffloadMode::AfSeparation => {
                 ui.strong("AF分离配置");
@@ -105,23 +153,35 @@ impl OffloadView {
                 // 注意力层设备选择
                 ui.horizontal(|ui| {
                     ui.label("注意力层:");
-                    if ui.selectable_label(self.af_attention_device == DeviceType::Cpu, "CPU").clicked() {
+                    let att_cpu = self.af_attention_device == DeviceType::Cpu;
+                    let att_gpu = self.af_attention_device == DeviceType::Cuda(0);
+                    
+                    if ui.selectable_label(att_cpu, "CPU").clicked() {
                         self.af_attention_device = DeviceType::Cpu;
                     }
-                    if ui.selectable_label(self.af_attention_device == DeviceType::Cuda(0), "GPU").clicked() {
+                    ui.label(if att_cpu { "✓" } else { "" });
+                    
+                    if ui.selectable_label(att_gpu, "GPU").clicked() {
                         self.af_attention_device = DeviceType::Cuda(0);
                     }
+                    ui.label(if att_gpu { "✓" } else { "" });
                 });
                 
                 // FFN层设备选择
                 ui.horizontal(|ui| {
                     ui.label("FFN层:");
-                    if ui.selectable_label(self.af_ffn_device == DeviceType::Cpu, "CPU").clicked() {
+                    let ffn_cpu = self.af_ffn_device == DeviceType::Cpu;
+                    let ffn_gpu = self.af_ffn_device == DeviceType::Cuda(0);
+                    
+                    if ui.selectable_label(ffn_cpu, "CPU").clicked() {
                         self.af_ffn_device = DeviceType::Cpu;
                     }
-                    if ui.selectable_label(self.af_ffn_device == DeviceType::Cuda(0), "GPU").clicked() {
+                    ui.label(if ffn_cpu { "✓" } else { "" });
+                    
+                    if ui.selectable_label(ffn_gpu, "GPU").clicked() {
                         self.af_ffn_device = DeviceType::Cuda(0);
                     }
+                    ui.label(if ffn_gpu { "✓" } else { "" });
                 });
                 
                 ui.separator();
