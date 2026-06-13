@@ -1,6 +1,6 @@
 use eframe::egui;
 use llama_core::network::NetworkStatus;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub struct HfView {
@@ -9,6 +9,7 @@ pub struct HfView {
     selected_model: Option<SearchModel>,
     download_progress: Option<f32>,
     download_size: Option<u64>,
+    download_path: Option<String>,
     network_status: Option<NetworkStatus>,
     mirror_url: String,
     status_message: String,
@@ -52,6 +53,7 @@ impl HfView {
             selected_model: None,
             download_progress: None,
             download_size: None,
+            download_path: None,
             network_status: None,
             mirror_url: "https://hf-mirror.com".into(),
             status_message: String::new(),
@@ -236,9 +238,32 @@ impl HfView {
             ui.strong("已选择模型");
             ui.label(&model_id);
 
+            // 下载路径选择
             if !downloading {
+                ui.horizontal(|ui| {
+                    ui.label("保存到:");
+                    if let Some(ref path) = self.download_path {
+                        ui.label(path);
+                    } else {
+                        ui.label("未选择");
+                    }
+                    if ui.button("选择位置").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("选择模型保存位置")
+                            .pick_folder()
+                        {
+                            self.download_path = Some(path.display().to_string());
+                        }
+                    }
+                });
+
+                let download_path = self.download_path.clone();
                 if ui.button("下载模型").clicked() {
-                    self.start_download(&model_id);
+                    if let Some(path) = download_path {
+                        self.start_download(&model_id, &path);
+                    } else {
+                        self.status_message = "请先选择保存位置".into();
+                    }
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -348,14 +373,15 @@ impl HfView {
         });
     }
 
-    fn start_download(&mut self, model_id: &str) {
+    fn start_download(&mut self, model_id: &str, save_path: &str) {
         self.is_downloading.store(true, Ordering::SeqCst);
-        self.status_message = format!("开始下载: {}", model_id);
+        self.status_message = format!("开始下载: {} -> {}", model_id, save_path);
         self.download_progress = Some(0.0);
         self.download_size = Some(0);
         
         let model_id = model_id.to_string();
         let mirror_url = self.mirror_url.clone();
+        let save_path = save_path.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         self.download_rx = Some(rx);
         
@@ -388,6 +414,7 @@ impl HfView {
                                     .unwrap_or("");
                                 
                                 let download_url = format!("{}/{}/resolve/main/{}", mirror_url, model_id, filename);
+                                let file_path = format!("{}/{}", save_path, filename);
                                 
                                 // 下载文件
                                 match client.get(&download_url).send() {
@@ -395,22 +422,27 @@ impl HfView {
                                         let total_size = resp.content_length().unwrap_or(0);
                                         let mut downloaded = 0u64;
                                         
-                                        let mut buffer = [0u8; 8192];
-                                        loop {
-                                            match resp.read(&mut buffer) {
-                                                Ok(0) => break,
-                                                Ok(n) => {
-                                                    downloaded += n as u64;
-                                                    let _ = tx.send(DownloadResult::Progress { 
-                                                        downloaded, 
-                                                        total: total_size 
-                                                    });
+                                        // 创建文件
+                                        if let Ok(mut file) = std::fs::File::create(&file_path) {
+                                            let mut buffer = [0u8; 8192];
+                                            loop {
+                                                match resp.read(&mut buffer) {
+                                                    Ok(0) => break,
+                                                    Ok(n) => {
+                                                        let _ = file.write_all(&buffer[..n]);
+                                                        downloaded += n as u64;
+                                                        let _ = tx.send(DownloadResult::Progress { 
+                                                            downloaded, 
+                                                            total: total_size 
+                                                        });
+                                                    }
+                                                    Err(_) => break,
                                                 }
-                                                Err(_) => break,
                                             }
+                                            let _ = tx.send(DownloadResult::Complete(file_path));
+                                        } else {
+                                            let _ = tx.send(DownloadResult::Error("无法创建文件".into()));
                                         }
-                                        
-                                        let _ = tx.send(DownloadResult::Complete(format!("下载完成: {}", filename)));
                                     }
                                     Err(e) => {
                                         let _ = tx.send(DownloadResult::Error(format!("下载失败: {}", e)));
