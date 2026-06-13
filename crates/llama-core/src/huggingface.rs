@@ -28,7 +28,8 @@ impl HfClient {
         Self {
             base_url,
             client: reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(15))
+                .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new()),
         }
@@ -38,17 +39,47 @@ impl HfClient {
         &self.base_url
     }
 
-    /// 搜索模型（同步版本）
+    /// 搜索模型（同步版本，带重试）
     pub fn search(&self, query: &str) -> anyhow::Result<Vec<HfModel>> {
         let url = reqwest::Url::parse_with_params(
             &format!("{}/api/models", self.base_url),
             &[("search", query), ("limit", "20"), ("sort", "downloads")],
         )?;
         
-        let resp = self.client.get(url).send()?;
-        let response: HfSearchResponse = resp.json()?;
+        // 重试机制
+        let mut last_error = None;
+        for attempt in 0..3 {
+            match self.client.get(url.clone()).send() {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !status.is_success() {
+                        return Err(anyhow::anyhow!("HTTP {}: {}", status, status.canonical_reason().unwrap_or("Unknown")));
+                    }
+                    
+                    let text = resp.text()?;
+                    
+                    // 尝试解析为HfSearchResponse
+                    if let Ok(response) = serde_json::from_str::<HfSearchResponse>(&text) {
+                        return Ok(response.items);
+                    }
+                    
+                    // 尝试解析为数组
+                    if let Ok(items) = serde_json::from_str::<Vec<HfModel>>(&text) {
+                        return Ok(items);
+                    }
+                    
+                    return Err(anyhow::anyhow!("无法解析响应: {}", text));
+                }
+                Err(e) => {
+                    last_error = Some(e);
+                    if attempt < 2 {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                    }
+                }
+            }
+        }
         
-        Ok(response.items)
+        Err(anyhow::anyhow!("搜索失败（已重试3次）: {}", last_error.unwrap()))
     }
 
     /// 获取模型信息
@@ -74,10 +105,8 @@ impl HfClient {
         let total_size = resp.content_length().unwrap_or(0);
         let mut downloaded = 0u64;
         
-        // 创建目标文件
         let mut file = std::fs::File::create(dest)?;
         
-        // 分块下载
         use std::io::{Read, Write};
         let mut buffer = [0u8; 8192];
         
