@@ -1,6 +1,7 @@
 use eframe::egui;
 use llama_core::huggingface::{HfClient, HfModel};
 use llama_core::network::NetworkStatus;
+use std::sync::{Arc, Mutex};
 
 pub struct HfView {
     search_query: String,
@@ -9,10 +10,16 @@ pub struct HfView {
     download_progress: Option<f32>,
     download_size: Option<u64>,
     network_status: Option<NetworkStatus>,
-    hf_client: HfClient,
+    hf_client: Arc<Mutex<HfClient>>,
     mirror_url: String,
     status_message: String,
-    is_searching: bool,
+    is_searching: Arc<Mutex<bool>>,
+    search_rx: Option<std::sync::mpsc::Receiver<SearchResult>>,
+}
+
+enum SearchResult {
+    Success(Vec<HfModel>),
+    Error(String),
 }
 
 impl Default for HfView {
@@ -30,14 +37,14 @@ impl HfView {
             download_progress: None,
             download_size: None,
             network_status: None,
-            hf_client: HfClient::new("https://huggingface.co".into()),
+            hf_client: Arc::new(Mutex::new(HfClient::new("https://huggingface.co".into()))),
             mirror_url: "https://hf-mirror.com".into(),
             status_message: String::new(),
-            is_searching: false,
+            is_searching: Arc::new(Mutex::new(false)),
+            search_rx: None,
         }
     }
 
-    /// 格式化下载大小
     fn format_size(bytes: u64) -> String {
         if bytes >= 1024 * 1024 * 1024 {
             format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
@@ -50,7 +57,6 @@ impl HfView {
         }
     }
 
-    /// 格式化下载次数
     fn format_downloads(downloads: u64) -> String {
         if downloads >= 1000000 {
             format!("{:.1}M", downloads as f64 / 1000000.0)
@@ -63,6 +69,25 @@ impl HfView {
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("HuggingFace 模型管理");
+
+        // 检查搜索结果
+        if let Some(rx) = self.search_rx.take() {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    SearchResult::Success(results) => {
+                        self.search_results = results;
+                        self.status_message = format!("找到 {} 个模型", self.search_results.len());
+                        *self.is_searching.lock().unwrap() = false;
+                    }
+                    SearchResult::Error(e) => {
+                        self.status_message = format!("搜索失败: {}", e);
+                        *self.is_searching.lock().unwrap() = false;
+                    }
+                }
+            } else {
+                self.search_rx = Some(rx);
+            }
+        }
 
         // Network status section
         ui.separator();
@@ -96,11 +121,13 @@ impl HfView {
             ui.label("镜像站:");
             ui.text_edit_singleline(&mut self.mirror_url);
             if ui.button("切换").clicked() {
-                self.hf_client = HfClient::new(self.mirror_url.clone());
+                let mut client = self.hf_client.lock().unwrap();
+                *client = HfClient::new(self.mirror_url.clone());
                 self.status_message = format!("已切换到: {}", self.mirror_url);
             }
             if ui.button("官方").clicked() {
-                self.hf_client = HfClient::new("https://huggingface.co".into());
+                let mut client = self.hf_client.lock().unwrap();
+                *client = HfClient::new("https://huggingface.co".into());
                 self.mirror_url = "https://huggingface.co".into();
                 self.status_message = "已切换到HuggingFace官方".into();
             }
@@ -113,15 +140,20 @@ impl HfView {
         ui.horizontal(|ui| {
             let response = ui.text_edit_singleline(&mut self.search_query);
             
-            // 支持Enter键搜索
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if !self.search_query.is_empty() {
+                if !self.search_query.is_empty() && !*self.is_searching.lock().unwrap() {
                     self.do_search();
                 }
             }
             
-            if ui.button("搜索").clicked() && !self.search_query.is_empty() {
+            let searching = *self.is_searching.lock().unwrap();
+            if ui.add_enabled(!searching && !self.search_query.is_empty(), egui::Button::new("搜索")).clicked() {
                 self.do_search();
+            }
+            
+            if searching {
+                ui.spinner();
+                ui.label("搜索中...");
             }
         });
 
@@ -155,7 +187,6 @@ impl HfView {
                             ui.small(format!("下载: {}", Self::format_downloads(model.downloads)));
                         });
 
-                        // 整行可点击
                         if response.clicked() || model_response.response.clicked() {
                             self.selected_model = Some(model.clone());
                         }
@@ -234,21 +265,24 @@ impl HfView {
     }
 
     fn do_search(&mut self) {
-        self.is_searching = true;
+        *self.is_searching.lock().unwrap() = true;
         self.status_message = format!("搜索中: {}...", self.search_query);
         
-        // 使用实际的HuggingFace API搜索
-        match self.hf_client.search(&self.search_query) {
-            Ok(results) => {
-                self.search_results = results;
-                self.status_message = format!("找到 {} 个模型", self.search_results.len());
-            }
-            Err(e) => {
-                self.status_message = format!("搜索失败: {}", e);
-                self.search_results.clear();
-            }
-        }
+        let client = self.hf_client.clone();
+        let query = self.search_query.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.search_rx = Some(rx);
         
-        self.is_searching = false;
+        std::thread::spawn(move || {
+            let client = client.lock().unwrap();
+            match client.search(&query) {
+                Ok(results) => {
+                    let _ = tx.send(SearchResult::Success(results));
+                }
+                Err(e) => {
+                    let _ = tx.send(SearchResult::Error(e.to_string()));
+                }
+            }
+        });
     }
 }
