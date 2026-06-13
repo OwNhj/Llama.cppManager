@@ -109,29 +109,45 @@ impl HfView {
             }
         }
 
-        // 检查下载结果
-        if let Some(rx) = self.download_rx.take() {
-            if let Ok(result) = rx.try_recv() {
-                match result {
-                    DownloadResult::Progress { downloaded, total } => {
-                        self.download_size = Some(downloaded);
-                        self.download_progress = Some(if total > 0 { downloaded as f32 / total as f32 } else { 0.0 });
-                    }
-                    DownloadResult::Complete(path) => {
-                        self.status_message = format!("下载完成: {}", path);
-                        self.download_progress = None;
-                        self.download_size = None;
-                        self.is_downloading.store(false, Ordering::SeqCst);
-                    }
-                    DownloadResult::Error(e) => {
-                        self.status_message = format!("下载失败: {}", e);
-                        self.download_progress = None;
-                        self.download_size = None;
-                        self.is_downloading.store(false, Ordering::SeqCst);
+        // 检查下载结果 - 持续检查直到下载完成
+        while let Some(rx) = self.download_rx.take() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        DownloadResult::Progress { downloaded, total } => {
+                            self.download_size = Some(downloaded);
+                            if total > 0 {
+                                self.download_progress = Some(downloaded as f32 / total as f32);
+                            } else {
+                                // 没有total时，使用下载量作为进度指示
+                                self.download_progress = Some(0.5);
+                            }
+                            self.download_rx = Some(rx);
+                        }
+                        DownloadResult::Complete(path) => {
+                            self.status_message = format!("下载完成: {}", path);
+                            self.download_progress = Some(1.0);
+                            self.is_downloading.store(false, Ordering::SeqCst);
+                            break;
+                        }
+                        DownloadResult::Error(e) => {
+                            self.status_message = format!("下载失败: {}", e);
+                            self.download_progress = None;
+                            self.download_size = None;
+                            self.is_downloading.store(false, Ordering::SeqCst);
+                            break;
+                        }
                     }
                 }
-            } else {
-                self.download_rx = Some(rx);
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.download_rx = Some(rx);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.status_message = "下载连接断开".into();
+                    self.is_downloading.store(false, Ordering::SeqCst);
+                    break;
+                }
             }
         }
 
@@ -276,14 +292,17 @@ impl HfView {
             }
 
             // Download progress
-            if let Some(progress) = self.download_progress {
+            if downloading {
                 ui.separator();
                 ui.strong("下载进度");
                 
-                let progress_text = if let Some(size) = self.download_size {
-                    format!("{} ({:.1}%)", Self::format_size(size), progress * 100.0)
+                let progress = self.download_progress.unwrap_or(0.0);
+                let downloaded = self.download_size.unwrap_or(0);
+                
+                let progress_text = if downloaded > 0 {
+                    format!("已下载: {}", Self::format_size(downloaded))
                 } else {
-                    format!("{:.1}%", progress * 100.0)
+                    "连接中...".to_string()
                 };
                 
                 ui.add(egui::ProgressBar::new(progress)
