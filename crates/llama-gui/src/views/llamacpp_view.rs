@@ -17,6 +17,10 @@ pub struct LlamaCppView {
     backend: Backend,
     cpu_optimization: CpuOptimization,
     
+    // 路径配置
+    source_path: String,
+    build_path: String,
+    
     download_rx: Option<std::sync::mpsc::Receiver<InstallResult>>,
     compile_rx: Option<std::sync::mpsc::Receiver<InstallResult>>,
 }
@@ -76,6 +80,10 @@ impl Default for LlamaCppView {
 
 impl LlamaCppView {
     pub fn new() -> Self {
+        let default_path = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| ".".into());
+        
         Self {
             installed: false,
             version: None,
@@ -88,6 +96,8 @@ impl LlamaCppView {
             log_output: Arc::new(Mutex::new(Vec::new())),
             backend: Backend::Cpu,
             cpu_optimization: CpuOptimization::Avx2,
+            source_path: format!("{}/llama.cpp", default_path),
+            build_path: format!("{}/llama.cpp-build", default_path),
             download_rx: None,
             compile_rx: None,
         }
@@ -123,6 +133,35 @@ impl LlamaCppView {
 
         let is_busy = self.is_downloading.load(Ordering::SeqCst) || 
                       self.is_compiling.load(Ordering::SeqCst);
+
+        // 路径配置
+        ui.strong("路径配置");
+        ui.horizontal(|ui| {
+            ui.label("源码路径:");
+            ui.add_enabled(!is_busy, egui::TextEdit::singleline(&mut self.source_path));
+            if ui.add_enabled(!is_busy, egui::Button::new("浏览")).clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("选择 llama.cpp 源码目录")
+                    .pick_folder()
+                {
+                    self.source_path = path.display().to_string();
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("编译输出:");
+            ui.add_enabled(!is_busy, egui::TextEdit::singleline(&mut self.build_path));
+            if ui.add_enabled(!is_busy, egui::Button::new("浏览")).clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("选择编译输出目录")
+                    .pick_folder()
+                {
+                    self.build_path = path.display().to_string();
+                }
+            }
+        });
+
+        ui.separator();
 
         // 编译选项
         ui.strong("编译选项");
@@ -280,22 +319,23 @@ impl LlamaCppView {
         self.log_output.lock().unwrap().clear();
         self.status_message = "开始下载 llama.cpp...".into();
         
+        let dest_path = self.source_path.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.download_rx = Some(rx);
         
         std::thread::spawn(move || {
-            let _ = tx.send(InstallResult::Log("开始克隆 llama.cpp 仓库...".into()));
+            let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", dest_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
             let output = std::process::Command::new("git")
-                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", "llama.cpp"])
+                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &dest_path])
                 .output();
             
             match output {
                 Ok(out) => {
                     if out.status.success() {
                         let _ = tx.send(InstallResult::Progress(1.0));
-                        let _ = tx.send(InstallResult::Complete("下载完成".into()));
+                        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let _ = tx.send(InstallResult::Error(stderr.to_string()));
@@ -316,11 +356,13 @@ impl LlamaCppView {
         
         let backend = self.backend.clone();
         let cpu_opt = self.cpu_optimization.clone();
+        let source_path = self.source_path.clone();
+        let build_path = self.build_path.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.compile_rx = Some(rx);
         
         std::thread::spawn(move || {
-            Self::compile_llamacpp(&backend, &cpu_opt, &tx);
+            Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
         });
     }
 
@@ -332,16 +374,17 @@ impl LlamaCppView {
         
         let backend = self.backend.clone();
         let cpu_opt = self.cpu_optimization.clone();
+        let source_path = self.source_path.clone();
+        let build_path = self.build_path.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        // 只使用compile_rx来接收所有结果
         self.compile_rx = Some(rx);
         
         std::thread::spawn(move || {
-            let _ = tx.send(InstallResult::Log("开始克隆 llama.cpp 仓库...".into()));
+            let _ = tx.send(InstallResult::Log(format!("开始克隆 llama.cpp 到: {}", source_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
             let output = std::process::Command::new("git")
-                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", "llama.cpp"])
+                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", &source_path])
                 .output();
             
             match output {
@@ -349,7 +392,7 @@ impl LlamaCppView {
                     if out.status.success() {
                         let _ = tx.send(InstallResult::Progress(0.5));
                         let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
-                        Self::compile_llamacpp(&backend, &cpu_opt, &tx);
+                        Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let _ = tx.send(InstallResult::Error(format!("下载失败: {}", stderr)));
@@ -362,13 +405,15 @@ impl LlamaCppView {
         });
     }
 
-    fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, tx: &std::sync::mpsc::Sender<InstallResult>) {
+    fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, source_path: &str, build_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
         let _ = tx.send(InstallResult::Progress(0.6));
+        let _ = tx.send(InstallResult::Log(format!("源码路径: {}", source_path)));
+        let _ = tx.send(InstallResult::Log(format!("输出路径: {}", build_path)));
         let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
         let mut cmake_args: Vec<String> = vec![
-            "-B".into(), "build".into(), 
-            "-S".into(), "llama.cpp".into(),
+            "-B".into(), build_path.to_string(), 
+            "-S".into(), source_path.to_string(),
         ];
         
         match backend {
