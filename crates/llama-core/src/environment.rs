@@ -301,9 +301,17 @@ impl Environment {
         // 方法2: 如果nvidia-smi失败，尝试使用PowerShell检测
         if gpus.is_empty() {
             // 使用PowerShell的ConvertTo-Json输出，更容易解析
-            if let Ok(output) = std::process::Command::new("powershell")
-                .args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | ConvertTo-Json"])
-                .output()
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | ConvertTo-Json"]);
+            
+            // Windows下隐藏CMD窗口
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            
+            if let Ok(output) = cmd.output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 
@@ -422,10 +430,17 @@ impl Environment {
             }
         "#;
         
-        let output = Command::new("powershell")
-            .args(["-Command", script])
-            .output()
-            .ok()?;
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-Command", script]);
+        
+        // Windows下隐藏CMD窗口
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
+        let output = cmd.output().ok()?;
         
         let stdout = String::from_utf8_lossy(&output.stdout);
         let vram_str = stdout.trim();

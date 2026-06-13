@@ -203,23 +203,27 @@ impl HfView {
             egui::ScrollArea::vertical()
                 .max_height(200.0)
                 .show(ui, |ui| {
-                    for model in &self.search_results {
+                    for model in &self.search_results.clone() {
                         let is_selected = self
                             .selected_model
                             .as_ref()
                             .map(|m| m.id == model.id)
                             .unwrap_or(false);
 
-                        if ui.selectable_label(is_selected, "").clicked() {
+                        let model_id = model.id.clone();
+                        let model_type = model.model_type.clone();
+                        let downloads = model.downloads;
+                        
+                        let response = ui.selectable_label(is_selected, &model_id);
+                        ui.horizontal(|ui| {
+                            ui.small(&model_type);
+                            ui.separator();
+                            ui.small(format!("{} 次下载", Self::format_downloads(downloads)));
+                        });
+                        
+                        if response.clicked() {
                             self.selected_model = Some(model.clone());
                         }
-                        ui.horizontal(|ui| {
-                            ui.label(&model.id);
-                            ui.separator();
-                            ui.small(&model.model_type);
-                            ui.separator();
-                            ui.small(format!("{} 次下载", Self::format_downloads(model.downloads)));
-                        });
                     }
                 });
         }
