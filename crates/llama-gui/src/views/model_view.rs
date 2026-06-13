@@ -55,6 +55,29 @@ impl ModelView {
         self.selected_path.is_some()
     }
 
+    /// 检查llama.cpp是否已安装
+    fn check_llama_cpp_installed(&self) -> bool {
+        // 检查常见路径
+        let common_paths = [
+            "C:\\llama.cpp\\bin\\llama-server.exe",
+            "C:\\Program Files\\llama.cpp\\bin\\llama-server.exe",
+            "/usr/local/bin/llama-server",
+            "/usr/bin/llama-server",
+        ];
+        
+        for path in &common_paths {
+            if std::path::Path::new(path).exists() {
+                return true;
+            }
+        }
+        
+        // 检查PATH中是否有llama-server
+        std::process::Command::new("llama-server")
+            .arg("--version")
+            .output()
+            .is_ok()
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("模型管理");
 
@@ -214,34 +237,39 @@ impl ModelView {
                 ui.separator();
                 ui.colored_label(egui::Color32::YELLOW, "此模型需要导出为GGUF格式才能使用");
                 
-                ui.horizontal(|ui| {
-                    ui.label("量化方式:");
-                    ui.selectable_value(&mut self.export_quant_type, "F16".to_string(), "F16");
-                    ui.selectable_value(&mut self.export_quant_type, "Q8_0".to_string(), "Q8_0");
-                    ui.selectable_value(&mut self.export_quant_type, "Q5_K_M".to_string(), "Q5_K_M");
-                    ui.selectable_value(&mut self.export_quant_type, "Q4_K_M".to_string(), "Q4_K_M");
-                });
+                // 检查llama.cpp是否安装
+                let llama_installed = self.check_llama_cpp_installed();
                 
-                if ui.button("导出为GGUF").clicked() {
-                    if let Some(ref info) = self.model_info {
-                        let input_path = info.path.display().to_string();
-                        let output_path = input_path.replace(&format!(".{}", 
-                            match info.format {
-                                ModelFormat::PyTorch => "bin",
-                                ModelFormat::SafeTensors => "safetensors",
-                                _ => "bin",
-                            }
-                        ), &format!("-{}.gguf", self.export_quant_type));
-                        
-                        self.status_message = format!("开始导出: {} -> {}", input_path, output_path);
-                        
-                        // 这里应该调用llama.cpp的quantize工具
-                        // 目前只是模拟
-                        std::thread::spawn(move || {
-                            // 模拟导出过程
-                            std::thread::sleep(std::time::Duration::from_secs(2));
-                        });
+                if llama_installed {
+                    ui.label("将使用 F16 精度导出（不量化）");
+                    
+                    if ui.button("导出为GGUF").clicked() {
+                        if let Some(ref info) = self.model_info {
+                            let input_path = info.path.display().to_string();
+                            let output_path = input_path.replace(&format!(".{}", 
+                                match info.format {
+                                    ModelFormat::PyTorch => "bin",
+                                    ModelFormat::SafeTensors => "safetensors",
+                                    _ => "bin",
+                                }
+                            ), ".gguf");
+                            
+                            self.status_message = format!("开始导出: {} -> {}", input_path, output_path);
+                            
+                            // 调用llama.cpp的转换工具
+                            let input = input_path.clone();
+                            let output = output_path.clone();
+                            std::thread::spawn(move || {
+                                // 调用 python convert 脚本或 llama.cpp 的转换工具
+                                let _ = std::process::Command::new("python")
+                                    .args(["convert_hf_to_gguf.py", &input, "--outfile", &output, "--outtype", "f16"])
+                                    .output();
+                            });
+                        }
                     }
+                } else {
+                    ui.colored_label(egui::Color32::GRAY, "未检测到 llama.cpp，无法导出");
+                    ui.label("请先安装 llama.cpp");
                 }
             }
         }

@@ -406,7 +406,7 @@ impl HfView {
         
         std::thread::spawn(move || {
             let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
             
@@ -421,27 +421,37 @@ impl HfView {
                                 .cloned()
                                 .unwrap_or_default();
                             
-                            // 找到模型文件
-                            if let Some(sibling) = siblings.iter().find(|s| {
-                                s.get("rfilename")
-                                    .and_then(|v| v.as_str())
-                                    .map(|f| f.ends_with(".gguf") || f.ends_with(".safetensors") || f.ends_with(".bin"))
-                                    .unwrap_or(false)
-                            }) {
-                                let filename = sibling.get("rfilename")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                
+                            // 收集所有模型文件
+                            let model_files: Vec<String> = siblings.iter()
+                                .filter_map(|s| s.get("rfilename").and_then(|v| v.as_str()))
+                                .filter(|f| f.ends_with(".gguf") || f.ends_with(".safetensors") || f.ends_with(".bin"))
+                                .map(|f| f.to_string())
+                                .collect();
+                            
+                            if model_files.is_empty() {
+                                let _ = tx.send(DownloadResult::Error("未找到可下载的模型文件".into()));
+                                return;
+                            }
+                            
+                            // 计算总大小
+                            let mut total_downloaded = 0u64;
+                            let mut total_size = 0u64;
+                            
+                            // 下载所有文件
+                            for filename in &model_files {
                                 let download_url = format!("{}/{}/resolve/main/{}", mirror_url, model_id, filename);
                                 let file_path = format!("{}/{}", save_path, filename);
                                 
-                                // 下载文件
+                                let _ = tx.send(DownloadResult::Progress { 
+                                    downloaded: total_downloaded, 
+                                    total: total_size 
+                                });
+                                
                                 match client.get(&download_url).send() {
                                     Ok(mut resp) => {
-                                        let total_size = resp.content_length().unwrap_or(0);
-                                        let mut downloaded = 0u64;
+                                        let file_size = resp.content_length().unwrap_or(0);
+                                        total_size += file_size;
                                         
-                                        // 创建文件
                                         if let Ok(mut file) = std::fs::File::create(&file_path) {
                                             let mut buffer = [0u8; 8192];
                                             loop {
@@ -449,27 +459,25 @@ impl HfView {
                                                     Ok(0) => break,
                                                     Ok(n) => {
                                                         let _ = file.write_all(&buffer[..n]);
-                                                        downloaded += n as u64;
+                                                        total_downloaded += n as u64;
                                                         let _ = tx.send(DownloadResult::Progress { 
-                                                            downloaded, 
+                                                            downloaded: total_downloaded, 
                                                             total: total_size 
                                                         });
                                                     }
                                                     Err(_) => break,
                                                 }
                                             }
-                                            let _ = tx.send(DownloadResult::Complete(file_path));
-                                        } else {
-                                            let _ = tx.send(DownloadResult::Error("无法创建文件".into()));
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = tx.send(DownloadResult::Error(format!("下载失败: {}", e)));
+                                        let _ = tx.send(DownloadResult::Error(format!("下载{}失败: {}", filename, e)));
+                                        return;
                                     }
                                 }
-                            } else {
-                                let _ = tx.send(DownloadResult::Error("未找到可下载的模型文件".into()));
                             }
+                            
+                            let _ = tx.send(DownloadResult::Complete(format!("下载完成: {} 个文件", model_files.len())));
                         } else {
                             let _ = tx.send(DownloadResult::Error("解析模型信息失败".into()));
                         }
