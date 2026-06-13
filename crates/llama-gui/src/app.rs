@@ -1,4 +1,5 @@
 use crate::views::{env_view, hf_view, model_view, offload_view, quantize_view, settings_view};
+use crate::theme::AnimateTheme;
 use eframe::egui;
 
 #[derive(PartialEq)]
@@ -18,6 +19,7 @@ pub struct App {
     offload_view: offload_view::OffloadView,
     settings_view: settings_view::SettingsView,
     last_model_path: Option<String>,
+    last_settings: Option<settings_view::AppSettings>,
 }
 
 struct HomeView {
@@ -47,12 +49,31 @@ impl App {
             offload_view: offload_view::OffloadView::new(),
             settings_view: settings_view::SettingsView::new(),
             last_model_path: None,
+            last_settings: None,
         }
+    }
+
+    /// 应用设置到egui上下文
+    fn apply_settings(&self, ctx: &egui::Context, settings: &settings_view::AppSettings) {
+        // 应用主题
+        let theme = match settings.theme {
+            settings_view::Theme::Dark => AnimateTheme::dark(),
+            settings_view::Theme::Light => AnimateTheme::light(),
+            settings_view::Theme::System => AnimateTheme::dark(), // 默认深色
+        };
+        theme.apply_to_ctx(ctx);
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 检查设置是否变更
+        let current_settings = self.settings_view.get_settings();
+        if self.last_settings.as_ref() != Some(&current_settings) {
+            self.apply_settings(ctx, &current_settings);
+            self.last_settings = Some(current_settings);
+        }
+
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui

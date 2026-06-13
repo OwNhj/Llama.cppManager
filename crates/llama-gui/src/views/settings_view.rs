@@ -1,7 +1,7 @@
 use eframe::egui;
 
 /// 应用程序设置
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AppSettings {
     pub theme: Theme,
     pub font_size: f32,

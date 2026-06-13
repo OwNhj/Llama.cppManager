@@ -203,14 +203,49 @@ impl Environment {
             .map(|c| c.brand().to_string())
             .unwrap_or_default();
         let features = Self::detect_cpu_features();
+        
+        // 检测物理核心数和逻辑线程数
+        let (physical_cores, logical_threads) = Self::detect_core_thread_count();
+        
         CpuInfo {
             model: cpu_model,
-            cores: sys.cpus().len(),
-            threads: sys.cpus().len(),
+            cores: physical_cores,
+            threads: logical_threads,
             features,
             total_memory_mb: sys.total_memory() / 1024 / 1024,
             available_memory_mb: sys.available_memory() / 1024 / 1024,
         }
+    }
+
+    /// 检测物理核心数和逻辑线程数
+    fn detect_core_thread_count() -> (usize, usize) {
+        // 使用系统命令检测
+        #[cfg(target_os = "windows")]
+        {
+            // 使用WMIC检测CPU信息
+            if let Ok(output) = std::process::Command::new("wmic")
+                .args(["cpu", "get", "NumberOfCores,NumberOfLogicalProcessors"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = stdout.lines().collect();
+                if lines.len() >= 2 {
+                    let parts: Vec<&str> = lines[1].trim().split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        let cores: usize = parts[0].parse().unwrap_or(1);
+                        let threads: usize = parts[1].parse().unwrap_or(1);
+                        return (cores, threads);
+                    }
+                }
+            }
+        }
+
+        // 备用方案：使用sysinfo
+        let sys = sysinfo::System::new_all();
+        let threads = sys.cpus().len();
+        // 假设物理核心数约为线程数的一半（超线程）
+        let cores = threads / 2;
+        (cores.max(1), threads)
     }
 
     fn detect_cpu_features() -> Vec<String> {
@@ -270,37 +305,60 @@ impl Environment {
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let mut lines = stdout.lines();
-                // 跳过标题行
-                lines.next();
-                for line in lines {
+                let lines: Vec<&str> = stdout.lines().collect();
+                
+                // 找到数据开始的行（跳过空行和标题）
+                let mut data_start = 0;
+                for (i, line) in lines.iter().enumerate() {
                     let line = line.trim();
-                    if !line.is_empty() {
-                        let parts: Vec<&str> = line.split_whitespace().collect();
-                        if parts.len() >= 2 {
-                            let name = parts[0..parts.len()-1].join(" ");
-                            let vram_str = parts.last().unwrap_or(&"0");
-                            let vram_mb: u64 = vram_str.parse().unwrap_or(0) / 1024 / 1024;
-
-                            let (backend, compute_capability) = if name.to_lowercase().contains("nvidia") {
-                                (GpuBackend::Cuda, "Unknown".to_string())
-                            } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
-                                (GpuBackend::Rocm, "Unknown".to_string())
-                            } else if name.to_lowercase().contains("intel") {
-                                (GpuBackend::Intel, "Unknown".to_string())
-                            } else {
-                                (GpuBackend::Other("Unknown".into()), "Unknown".to_string())
-                            };
-
-                            gpus.push(GpuInfo {
-                                name,
-                                vram_mb,
-                                available_vram_mb: vram_mb, // 假设全部可用
-                                backend,
-                                driver_version: "Unknown".into(),
-                                compute_capability,
-                            });
+                    if line.contains("AdapterRAM") || line.is_empty() {
+                        continue;
+                    }
+                    if !line.is_empty() && i > 0 {
+                        data_start = i;
+                        break;
+                    }
+                }
+                
+                for line in &lines[data_start..] {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    
+                    // WMIC输出格式: Name  AdapterRAM
+                    // 使用固定宽度解析
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        // 最后一个数字是AdapterRAM
+                        let vram_str = parts.last().unwrap_or(&"0");
+                        let vram_mb: u64 = vram_str.parse().unwrap_or(0) / 1024 / 1024;
+                        
+                        // 其余部分是GPU名称
+                        let name = parts[..parts.len()-1].join(" ");
+                        
+                        if name.is_empty() || vram_mb == 0 {
+                            continue;
                         }
+
+                        let (backend, compute_capability) = if name.to_lowercase().contains("nvidia") {
+                            (GpuBackend::Cuda, "Unknown".to_string())
+                        } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
+                            (GpuBackend::Rocm, "Unknown".to_string())
+                        } else if name.to_lowercase().contains("intel") {
+                            (GpuBackend::Intel, "Unknown".to_string())
+                        } else {
+                            (GpuBackend::Other("Unknown".into()), "Unknown".to_string())
+                        };
+
+                        gpus.push(GpuInfo {
+                            name,
+                            vram_mb,
+                            available_vram_mb: vram_mb, // 假设全部可用
+                            backend,
+                            driver_version: "Unknown".into(),
+                            compute_capability,
+                        });
                     }
                 }
             }
