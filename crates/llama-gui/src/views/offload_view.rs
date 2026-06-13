@@ -1,12 +1,35 @@
 use eframe::egui;
 use llama_core::environment::DeviceType;
-use llama_server::offload::{CommProtocol, OffloadConfig, OffloadMode};
+use llama_server::offload::{OffloadConfig, OffloadMode};
 
 pub struct OffloadView {
     config: OffloadConfig,
     total_layers: u32,
     model_name: Option<String>,
-    edit_total_layers: bool,
+    af_config: AfConfig,
+}
+
+#[derive(Debug, Clone)]
+struct AfConfig {
+    /// 注意力层比例（0.0-1.0）
+    attention_ratio: f32,
+    /// FFN层比例（0.0-1.0）
+    ffn_ratio: f32,
+    /// 是否将注意力层放在GPU
+    attention_on_gpu: bool,
+    /// 是否将FFN层放在GPU
+    ffn_on_gpu: bool,
+}
+
+impl Default for AfConfig {
+    fn default() -> Self {
+        Self {
+            attention_ratio: 0.5,
+            ffn_ratio: 0.5,
+            attention_on_gpu: true,
+            ffn_on_gpu: false,
+        }
+    }
 }
 
 impl Default for OffloadView {
@@ -19,9 +42,9 @@ impl OffloadView {
     pub fn new() -> Self {
         Self {
             config: OffloadConfig::default(),
-            total_layers: 32,
+            total_layers: 0,
             model_name: None,
-            edit_total_layers: false,
+            af_config: AfConfig::default(),
         }
     }
 
@@ -29,14 +52,13 @@ impl OffloadView {
     pub fn set_model_info(&mut self, name: &str, total_layers: u32) {
         self.model_name = Some(name.to_string());
         self.total_layers = total_layers;
-        // 重置配置
         self.config = OffloadConfig::default();
     }
 
     /// 清除模型信息
     pub fn clear_model_info(&mut self) {
         self.model_name = None;
-        self.total_layers = 32;
+        self.total_layers = 0;
         self.config = OffloadConfig::default();
     }
 
@@ -53,86 +75,71 @@ impl OffloadView {
                 ui.label("当前模型:");
                 ui.strong(name);
                 ui.separator();
-                if self.edit_total_layers {
-                    ui.label("总层数:");
-                    ui.add(egui::Slider::new(&mut self.total_layers, 1..=200));
-                    if ui.button("确认").clicked() {
-                        self.edit_total_layers = false;
-                        // 重置配置
-                        self.config.layers.clear();
-                    }
-                } else {
-                    ui.label(format!("总层数: {}", self.total_layers));
-                    if ui.small_button("编辑").clicked() {
-                        self.edit_total_layers = true;
-                    }
-                }
+                ui.label(format!("总层数: {}", self.total_layers));
             });
         } else {
-            ui.label("请先在首页选择模型");
+            ui.label("请先在首页选择GGUF格式模型");
         }
 
         ui.separator();
 
+        // 分离模式选择
         ui.label("分离模式:");
         ui.horizontal(|ui| {
-            for mode in [
-                OffloadMode::Normal,
-                OffloadMode::AfSeparation,
-                OffloadMode::PdSeparation,
-                OffloadMode::Custom,
-            ] {
-                if ui
-                    .selectable_label(self.config.mode == mode, mode.to_string())
-                    .clicked()
-                {
+            let modes = [
+                (OffloadMode::Normal, "普通模式"),
+                (OffloadMode::AfSeparation, "AF分离"),
+                (OffloadMode::PdSeparation, "PD分离"),
+                (OffloadMode::Custom, "自定义"),
+            ];
+            
+            for (mode, label) in modes {
+                let enabled = mode != OffloadMode::PdSeparation;
+                let selected = self.config.mode == mode;
+                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                     self.config.mode = mode;
+                }
+                if selected {
+                    ui.label("✓");
                 }
             }
         });
 
+        // PD分离 - 开发中提示
         if self.config.mode == OffloadMode::PdSeparation {
             ui.separator();
-            ui.label("PD 分离配置");
-
-            ui.horizontal(|ui| {
-                ui.label("Prefill 地址:");
-                ui.text_edit_singleline(
-                    self.config
-                        .pd_prefill_addr
-                        .get_or_insert_with(|| "127.0.0.1:8080".into()),
-                );
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Decode 地址:");
-                ui.text_edit_singleline(
-                    self.config
-                        .pd_decode_addr
-                        .get_or_insert_with(|| "127.0.0.1:8081".into()),
-                );
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("通信协议:");
-                let protocols = [
-                    (CommProtocol::SharedMemory, "SharedMemory"),
-                    (CommProtocol::Tcp, "Tcp"),
-                    (CommProtocol::Rdma, "Rdma"),
-                ];
-                for (proto, label) in protocols {
-                    let selected = self.config.comm_protocol.as_ref() == Some(&proto);
-                    if ui.selectable_label(selected, label).clicked() {
-                        self.config.comm_protocol = Some(proto);
-                    }
-                }
-            });
+            ui.colored_label(egui::Color32::YELLOW, "⚠ PD分离功能开发中");
+            ui.label("此功能暂不可用，将在后续版本中实现。");
         }
 
+        // AF分离配置
+        if self.config.mode == OffloadMode::AfSeparation {
+            ui.separator();
+            ui.strong("AF分离配置");
+            ui.label("AF分离将模型的注意力层(Attention)和前馈层(FFN)分开处理");
+            ui.label("注意力层通常需要更多显存，FFN层可以放在CPU上");
+            
+            ui.separator();
+            
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.af_config.attention_on_gpu, "注意力层 → GPU");
+                ui.checkbox(&mut self.af_config.ffn_on_gpu, "FFN层 → GPU");
+            });
+            
+            ui.label("提示: 注意力层对推理速度影响较大，建议放在GPU上");
+            
+            // 应用AF配置
+            if ui.button("应用AF配置").clicked() {
+                self.apply_af_config();
+            }
+        }
+
+        // Custom模式配置
         if self.config.mode == OffloadMode::Custom {
             ui.separator();
-            ui.label("逐层 Offload 配置");
-
+            ui.strong("逐层 Offload 配置");
+            ui.label("GPU:0 / GPU:1 表示不同的GPU设备（如果有多块GPU）");
+            
             ui.horizontal(|ui| {
                 if ui.button("全部 GPU").clicked() {
                     self.set_all_layers(DeviceType::Cuda(0));
@@ -147,69 +154,96 @@ impl OffloadView {
 
             ui.separator();
 
-            egui::ScrollArea::vertical()
-                .max_height(300.0)
-                .show(ui, |ui| {
-                    for i in 0..self.total_layers {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("Layer {}: ", i));
-                            let current_device = self
-                                .config
-                                .layers
-                                .iter()
-                                .find(|l| l.layer_index == i)
-                                .map(|l| l.device.clone())
-                                .unwrap_or(DeviceType::Cpu);
+            if self.total_layers > 0 {
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for i in 0..self.total_layers {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Layer {}: ", i));
+                                let current_device = self
+                                    .config
+                                    .layers
+                                    .iter()
+                                    .find(|l| l.layer_index == i)
+                                    .map(|l| l.device.clone())
+                                    .unwrap_or(DeviceType::Cpu);
 
-                            if ui
-                                .selectable_label(current_device == DeviceType::Cpu, "CPU")
-                                .clicked()
-                            {
-                                self.set_layer_device(i, DeviceType::Cpu);
-                            }
-                            if ui
-                                .selectable_label(current_device == DeviceType::Cuda(0), "CUDA:0")
-                                .clicked()
-                            {
-                                self.set_layer_device(i, DeviceType::Cuda(0));
-                            }
-                            if ui
-                                .selectable_label(current_device == DeviceType::Cuda(1), "CUDA:1")
-                                .clicked()
-                            {
-                                self.set_layer_device(i, DeviceType::Cuda(1));
-                            }
-                        });
-                    }
-                });
+                                if ui
+                                    .selectable_label(current_device == DeviceType::Cpu, "CPU")
+                                    .clicked()
+                                {
+                                    self.set_layer_device(i, DeviceType::Cpu);
+                                }
+                                if ui
+                                    .selectable_label(current_device == DeviceType::Cuda(0), "GPU:0")
+                                    .clicked()
+                                {
+                                    self.set_layer_device(i, DeviceType::Cuda(0));
+                                }
+                                if ui
+                                    .selectable_label(current_device == DeviceType::Cuda(1), "GPU:1")
+                                    .clicked()
+                                {
+                                    self.set_layer_device(i, DeviceType::Cuda(1));
+                                }
+                            });
+                        }
+                    });
+            } else {
+                ui.label("请先加载模型以获取层数信息");
+            }
         }
 
         ui.separator();
         self.show_vram_stats(ui);
     }
 
+    fn apply_af_config(&mut self) {
+        self.config.layers.clear();
+        
+        if self.total_layers == 0 {
+            return;
+        }
+        
+        for i in 0..self.total_layers {
+            // 根据AF配置决定每层的设备
+            let device = if self.af_config.attention_on_gpu && i % 2 == 0 {
+                // 偶数层为注意力层
+                DeviceType::Cuda(0)
+            } else if self.af_config.ffn_on_gpu && i % 2 == 1 {
+                // 奇数层为FFN层
+                DeviceType::Cuda(0)
+            } else {
+                DeviceType::Cpu
+            };
+            
+            self.config.layers.push(llama_server::offload::LayerOffload {
+                layer_index: i,
+                device,
+                vram_mb: 0,
+            });
+        }
+    }
+
     fn set_all_layers(&mut self, device: DeviceType) {
         self.config.layers.clear();
         for i in 0..self.total_layers {
-            self.config
-                .layers
-                .push(llama_server::offload::LayerOffload {
-                    layer_index: i,
-                    device: device.clone(),
-                    vram_mb: 0,
-                });
+            self.config.layers.push(llama_server::offload::LayerOffload {
+                layer_index: i,
+                device: device.clone(),
+                vram_mb: 0,
+            });
         }
     }
 
     fn set_layer_device(&mut self, layer_index: u32, device: DeviceType) {
         self.config.layers.retain(|l| l.layer_index != layer_index);
-        self.config
-            .layers
-            .push(llama_server::offload::LayerOffload {
-                layer_index,
-                device,
-                vram_mb: 0,
-            });
+        self.config.layers.push(llama_server::offload::LayerOffload {
+            layer_index,
+            device,
+            vram_mb: 0,
+        });
         self.config.layers.sort_by_key(|l| l.layer_index);
     }
 
@@ -222,13 +256,11 @@ impl OffloadView {
             } else {
                 DeviceType::Cpu
             };
-            self.config
-                .layers
-                .push(llama_server::offload::LayerOffload {
-                    layer_index: i,
-                    device,
-                    vram_mb: 0,
-                });
+            self.config.layers.push(llama_server::offload::LayerOffload {
+                layer_index: i,
+                device,
+                vram_mb: 0,
+            });
         }
     }
 
