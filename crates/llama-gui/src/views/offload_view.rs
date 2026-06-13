@@ -96,7 +96,7 @@ impl OffloadView {
                     if ui.button("全部 CPU").clicked() {
                         self.set_all_layers(DeviceType::Cpu);
                     }
-                    if ui.button("自动分配").clicked() {
+                    if ui.button("手动分配层数").clicked() {
                         self.auto_assign_layers();
                     }
                 });
@@ -153,35 +153,25 @@ impl OffloadView {
                 // 注意力层设备选择
                 ui.horizontal(|ui| {
                     ui.label("注意力层:");
-                    let att_cpu = self.af_attention_device == DeviceType::Cpu;
-                    let att_gpu = self.af_attention_device == DeviceType::Cuda(0);
-                    
-                    if ui.selectable_label(att_cpu, "CPU").clicked() {
+                    if ui.button("CPU").clicked() {
                         self.af_attention_device = DeviceType::Cpu;
                     }
-                    ui.label(if att_cpu { "✓" } else { "" });
-                    
-                    if ui.selectable_label(att_gpu, "GPU").clicked() {
+                    if ui.button("GPU").clicked() {
                         self.af_attention_device = DeviceType::Cuda(0);
                     }
-                    ui.label(if att_gpu { "✓" } else { "" });
+                    ui.label(if self.af_attention_device == DeviceType::Cpu { "当前: CPU" } else { "当前: GPU" });
                 });
                 
                 // FFN层设备选择
                 ui.horizontal(|ui| {
                     ui.label("FFN层:");
-                    let ffn_cpu = self.af_ffn_device == DeviceType::Cpu;
-                    let ffn_gpu = self.af_ffn_device == DeviceType::Cuda(0);
-                    
-                    if ui.selectable_label(ffn_cpu, "CPU").clicked() {
+                    if ui.button("CPU").clicked() {
                         self.af_ffn_device = DeviceType::Cpu;
                     }
-                    ui.label(if ffn_cpu { "✓" } else { "" });
-                    
-                    if ui.selectable_label(ffn_gpu, "GPU").clicked() {
+                    if ui.button("GPU").clicked() {
                         self.af_ffn_device = DeviceType::Cuda(0);
                     }
-                    ui.label(if ffn_gpu { "✓" } else { "" });
+                    ui.label(if self.af_ffn_device == DeviceType::Cpu { "当前: CPU" } else { "当前: GPU" });
                 });
                 
                 ui.separator();
