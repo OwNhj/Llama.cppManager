@@ -198,7 +198,7 @@ impl HfView {
                 let progress_text = if let Some(size) = self.download_size {
                     format!("{} / {} ({:.1}%)", 
                         Self::format_size(size),
-                        Self::format_size(4_000_000_000), // 假设4GB
+                        Self::format_size(4_000_000_000),
                         progress * 100.0)
                 } else {
                     format!("{:.1}%", progress * 100.0)
@@ -237,35 +237,18 @@ impl HfView {
         self.is_searching = true;
         self.status_message = format!("搜索中: {}...", self.search_query);
         
-        // 模拟搜索结果（实际应调用HuggingFace API）
-        self.search_results = vec![
-            HfModel {
-                id: "meta-llama/Llama-3.1-8B-Instruct".into(),
-                model_type: "llama".into(),
-                tags: vec!["text-generation".into(), "instruction-tuned".into()],
-                downloads: 1200000,
-            },
-            HfModel {
-                id: "Qwen/Qwen2.5-7B-Instruct".into(),
-                model_type: "qwen".into(),
-                tags: vec!["text-generation".into(), "chinese".into()],
-                downloads: 890000,
-            },
-            HfModel {
-                id: "mistralai/Mistral-7B-Instruct-v0.3".into(),
-                model_type: "mistral".into(),
-                tags: vec!["text-generation".into()],
-                downloads: 650000,
-            },
-            HfModel {
-                id: "google/gemma-2-9b-it".into(),
-                model_type: "gemma".into(),
-                tags: vec!["text-generation".into()],
-                downloads: 420000,
-            },
-        ];
+        // 使用实际的HuggingFace API搜索
+        match self.hf_client.search(&self.search_query) {
+            Ok(results) => {
+                self.search_results = results;
+                self.status_message = format!("找到 {} 个模型", self.search_results.len());
+            }
+            Err(e) => {
+                self.status_message = format!("搜索失败: {}", e);
+                self.search_results.clear();
+            }
+        }
         
-        self.status_message = format!("找到 {} 个模型", self.search_results.len());
         self.is_searching = false;
     }
 }
