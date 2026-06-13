@@ -2109,6 +2109,7 @@ dependencies = [
  "llama-core",
  "llama-server",
  "rfd",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

@@ -1,9 +1,10 @@
-use crate::views::{env_view, model_view, offload_view, quantize_view, settings_view};
+use crate::views::{env_view, hf_view, model_view, offload_view, quantize_view, settings_view};
 use eframe::egui;
 
 #[derive(PartialEq)]
 enum Tab {
     Model,
+    HuggingFace,
     Quantize,
     Environment,
     Offload,
@@ -13,6 +14,7 @@ enum Tab {
 pub struct App {
     current_tab: Tab,
     model_view: model_view::ModelView,
+    hf_view: hf_view::HfView,
     quantize_view: quantize_view::QuantizeView,
     env_view: env_view::EnvView,
     offload_view: offload_view::OffloadView,
@@ -24,6 +26,7 @@ impl App {
         Self {
             current_tab: Tab::Model,
             model_view: model_view::ModelView::new(),
+            hf_view: hf_view::HfView::new(),
             quantize_view: quantize_view::QuantizeView::new(),
             env_view: env_view::EnvView::new(),
             offload_view: offload_view::OffloadView::new(),
@@ -41,6 +44,12 @@ impl eframe::App for App {
                     .clicked()
                 {
                     self.current_tab = Tab::Model;
+                }
+                if ui
+                    .selectable_label(self.current_tab == Tab::HuggingFace, "HuggingFace")
+                    .clicked()
+                {
+                    self.current_tab = Tab::HuggingFace;
                 }
                 if ui
                     .selectable_label(self.current_tab == Tab::Quantize, "量化工具")
@@ -71,6 +80,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| match self.current_tab {
             Tab::Model => self.model_view.show(ui),
+            Tab::HuggingFace => self.hf_view.show(ui),
             Tab::Quantize => self.quantize_view.show(ui),
             Tab::Environment => self.env_view.show(ui),
             Tab::Offload => self.offload_view.show(ui),
