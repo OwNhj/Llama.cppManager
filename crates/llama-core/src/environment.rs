@@ -340,18 +340,10 @@ impl Environment {
                             .unwrap_or(0);
                         let mut vram_mb = vram_bytes / 1024 / 1024;
                         
-                        // 对于AMD GPU，AdapterRAM可能不准确，尝试从其他来源获取
-                        // 如果显存小于1GB但名称包含AMD/Radeon，可能是报告错误
-                        if vram_mb < 1024 && (name_lower.contains("amd") || name_lower.contains("radeon")) {
-                            // 尝试使用常见显存大小
-                            if name_lower.contains("9070") || name_lower.contains("9060") {
-                                vram_mb = 16384; // 16GB
-                            } else if name_lower.contains("7900") || name_lower.contains("7800") {
-                                vram_mb = 20480; // 20GB
-                            } else if name_lower.contains("6900") || name_lower.contains("6800") {
-                                vram_mb = 16384; // 16GB
-                            } else if name_lower.contains("6700") || name_lower.contains("6600") {
-                                vram_mb = 12288; // 12GB
+                        // 对于AMD GPU，尝试从注册表获取准确显存
+                        if name_lower.contains("amd") || name_lower.contains("radeon") {
+                            if let Some(reg_vram) = Self::get_amd_gpu_vram_from_registry(&name) {
+                                vram_mb = reg_vram;
                             }
                         }
                         
@@ -409,6 +401,47 @@ impl Environment {
         }
 
         gpus
+    }
+
+    /// 从注册表获取AMD GPU显存（Windows）
+    #[cfg(target_os = "windows")]
+    fn get_amd_gpu_vram_from_registry(_gpu_name: &str) -> Option<u64> {
+        use std::process::Command;
+        
+        // 使用PowerShell查询注册表
+        let script = r#"
+            Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" |
+            ForEach-Object {
+                $props = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+                if ($props.PSObject.Properties['DriverDesc'] -and 
+                    $props.DriverDesc -like '*AMD*' -or $props.DriverDesc -like '*Radeon*') {
+                    if ($props.PSObject.Properties['HardwareInformation.qwMemorySize']) {
+                        $props.'HardwareInformation.qwMemorySize'
+                    }
+                }
+            }
+        "#;
+        
+        let output = Command::new("powershell")
+            .args(["-Command", script])
+            .output()
+            .ok()?;
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let vram_str = stdout.trim();
+        
+        if let Ok(vram_bytes) = vram_str.parse::<u64>() {
+            if vram_bytes > 0 {
+                return Some(vram_bytes / 1024 / 1024);
+            }
+        }
+        
+        None
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn get_amd_gpu_vram_from_registry(_gpu_name: &str) -> Option<u64> {
+        None
     }
 
     fn detect_npu() -> Option<NpuInfo> {
