@@ -78,6 +78,43 @@ impl ModelView {
             .is_ok()
     }
 
+    /// 查找同目录下的所有模型文件
+    fn find_model_files(dir: &std::path::Path, main_file: &str) -> Vec<std::path::PathBuf> {
+        let mut files = Vec::new();
+        
+        // 获取主文件的基础名（不带扩展名和分片号）
+        let base_name = if let Some(name) = main_file.rfind('.') {
+            &main_file[..name]
+        } else {
+            main_file
+        };
+        
+        // 去掉分片号后缀（如 -00001-of-00003）
+        let base_name = if let Some(pos) = base_name.rfind("-00") {
+            &base_name[..pos]
+        } else {
+            base_name
+        };
+        
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name().to_string_lossy().to_string();
+                let path = entry.path();
+                
+                // 检查是否是相关的模型文件
+                if file_name.starts_with(base_name) && 
+                   (file_name.ends_with(".safetensors") || 
+                    file_name.ends_with(".bin") || 
+                    file_name.ends_with(".gguf")) {
+                    files.push(path);
+                }
+            }
+        }
+        
+        files.sort();
+        files
+    }
+
     pub fn show(&mut self, ui: &mut egui::Ui) {
         ui.heading("模型管理");
 
@@ -89,13 +126,57 @@ impl ModelView {
             if ui.button("浏览本地模型").clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("GGUF", &["gguf"])
-                    .add_filter("PyTorch", &["bin"])
-                    .add_filter("SafeTensors", &["safetensors"])
+                    .add_filter("模型文件", &["bin", "safetensors"])
                     .pick_file()
                 {
                     let path_str = path.display().to_string();
                     let filename = path.file_name().unwrap_or_default().to_string_lossy();
                     let format = ModelFormat::detect(&filename);
+                    
+                    // 检查是否是多文件模型
+                    if format == ModelFormat::SafeTensors || format == ModelFormat::PyTorch {
+                        // 尝试查找同目录下的其他分片文件
+                        if let Some(parent) = path.parent() {
+                            let model_files = Self::find_model_files(parent, &filename);
+                            if model_files.len() > 1 {
+                                // 多文件模型
+                                let total_size: u64 = model_files.iter()
+                                    .filter_map(|p| std::fs::metadata(p).ok())
+                                    .map(|m| m.len())
+                                    .sum();
+                                
+                                let info = ModelInfo {
+                                    path: path.clone(),
+                                    format: format.clone(),
+                                    name: format!("{} ({}个文件)", filename, model_files.len()),
+                                    size_bytes: total_size,
+                                };
+                                
+                                self.selected_path = Some(path_str);
+                                self.model_info = Some(info.clone());
+                                self.detect_mtp_support(&path);
+                                
+                                if !self.models.iter().any(|m| m.path == path) {
+                                    self.models.push(info);
+                                }
+                                
+                                self.status_message = format!(
+                                    "已加载{}格式模型: {} ({}个文件, {:.2} GB)", 
+                                    match format {
+                                        ModelFormat::PyTorch => "PyTorch",
+                                        ModelFormat::SafeTensors => "SafeTensors",
+                                        _ => "未知",
+                                    },
+                                    filename,
+                                    model_files.len(),
+                                    total_size as f64 / 1024.0 / 1024.0 / 1024.0
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    
+                    // 单文件模型
                     let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
                     let info = ModelInfo {
