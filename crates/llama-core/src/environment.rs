@@ -239,7 +239,7 @@ impl Environment {
     fn detect_gpus() -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
 
-        // NVIDIA GPU
+        // 方法1: 使用nvidia-smi检测NVIDIA GPU
         if let Ok(output) = std::process::Command::new("nvidia-smi")
             .args([
                 "--query-gpu=name,memory.total,memory.free,driver_version,compute_cap",
@@ -258,6 +258,70 @@ impl Environment {
                         backend: GpuBackend::Cuda,
                         driver_version: parts[3].trim().to_string(),
                         compute_capability: parts[4].trim().to_string(),
+                    });
+                }
+            }
+        }
+
+        // 方法2: 如果nvidia-smi失败，尝试使用WMIC检测
+        if gpus.is_empty() {
+            if let Ok(output) = std::process::Command::new("wmic")
+                .args(["path", "win32_videocontroller", "get", "name,adapterram"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let mut lines = stdout.lines();
+                // 跳过标题行
+                lines.next();
+                for line in lines {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() >= 2 {
+                            let name = parts[0..parts.len()-1].join(" ");
+                            let vram_str = parts.last().unwrap_or(&"0");
+                            let vram_mb: u64 = vram_str.parse().unwrap_or(0) / 1024 / 1024;
+
+                            let (backend, compute_capability) = if name.to_lowercase().contains("nvidia") {
+                                (GpuBackend::Cuda, "Unknown".to_string())
+                            } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
+                                (GpuBackend::Rocm, "Unknown".to_string())
+                            } else if name.to_lowercase().contains("intel") {
+                                (GpuBackend::Intel, "Unknown".to_string())
+                            } else {
+                                (GpuBackend::Other("Unknown".into()), "Unknown".to_string())
+                            };
+
+                            gpus.push(GpuInfo {
+                                name,
+                                vram_mb,
+                                available_vram_mb: vram_mb, // 假设全部可用
+                                backend,
+                                driver_version: "Unknown".into(),
+                                compute_capability,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 方法3: 如果还是没有检测到，尝试使用dxdiag
+        if gpus.is_empty() {
+            if let Ok(output) = std::process::Command::new("dxdiag")
+                .args(["-t", "dxdiag_output.xml"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains("Card name") || stdout.contains("Display") {
+                    // 解析dxdiag输出
+                    gpus.push(GpuInfo {
+                        name: "检测到GPU (详细信息需要dxdiag)".into(),
+                        vram_mb: 0,
+                        available_vram_mb: 0,
+                        backend: GpuBackend::Other("Unknown".into()),
+                        driver_version: "Unknown".into(),
+                        compute_capability: "Unknown".into(),
                     });
                 }
             }
