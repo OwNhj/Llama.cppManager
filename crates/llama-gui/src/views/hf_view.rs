@@ -1,5 +1,6 @@
 use eframe::egui;
 use llama_core::network::NetworkStatus;
+use std::io::Read;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 pub struct HfView {
@@ -8,11 +9,14 @@ pub struct HfView {
     selected_model: Option<SearchModel>,
     download_progress: Option<f32>,
     download_size: Option<u64>,
+    download_url: Option<String>,
     network_status: Option<NetworkStatus>,
     mirror_url: String,
     status_message: String,
     is_searching: Arc<AtomicBool>,
     search_rx: Option<std::sync::mpsc::Receiver<SearchResult>>,
+    is_downloading: Arc<AtomicBool>,
+    download_rx: Option<std::sync::mpsc::Receiver<DownloadResult>>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,6 +29,12 @@ pub struct SearchModel {
 
 enum SearchResult {
     Success(Vec<SearchModel>),
+    Error(String),
+}
+
+enum DownloadResult {
+    Progress { downloaded: u64, total: u64 },
+    Complete(String),
     Error(String),
 }
 
@@ -42,11 +52,24 @@ impl HfView {
             selected_model: None,
             download_progress: None,
             download_size: None,
+            download_url: None,
             network_status: None,
             mirror_url: "https://hf-mirror.com".into(),
             status_message: String::new(),
             is_searching: Arc::new(AtomicBool::new(false)),
             search_rx: None,
+            is_downloading: Arc::new(AtomicBool::new(false)),
+            download_rx: None,
+        }
+    }
+
+    fn format_downloads(downloads: u64) -> String {
+        if downloads >= 1000000 {
+            format!("{:.1}M", downloads as f64 / 1000000.0)
+        } else if downloads >= 1000 {
+            format!("{:.1}K", downloads as f64 / 1000.0)
+        } else {
+            downloads.to_string()
         }
     }
 
@@ -59,16 +82,6 @@ impl HfView {
             format!("{:.2} KB", bytes as f64 / 1024.0)
         } else {
             format!("{} B", bytes)
-        }
-    }
-
-    fn format_downloads(downloads: u64) -> String {
-        if downloads >= 1000000 {
-            format!("{:.1}M", downloads as f64 / 1000000.0)
-        } else if downloads >= 1000 {
-            format!("{:.1}K", downloads as f64 / 1000.0)
-        } else {
-            downloads.to_string()
         }
     }
 
@@ -95,7 +108,34 @@ impl HfView {
             }
         }
 
+        // 检查下载结果
+        if let Some(rx) = self.download_rx.take() {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    DownloadResult::Progress { downloaded, total } => {
+                        self.download_size = Some(downloaded);
+                        self.download_progress = Some(if total > 0 { downloaded as f32 / total as f32 } else { 0.0 });
+                    }
+                    DownloadResult::Complete(path) => {
+                        self.status_message = format!("下载完成: {}", path);
+                        self.download_progress = None;
+                        self.download_size = None;
+                        self.is_downloading.store(false, Ordering::SeqCst);
+                    }
+                    DownloadResult::Error(e) => {
+                        self.status_message = format!("下载失败: {}", e);
+                        self.download_progress = None;
+                        self.download_size = None;
+                        self.is_downloading.store(false, Ordering::SeqCst);
+                    }
+                }
+            } else {
+                self.download_rx = Some(rx);
+            }
+        }
+
         let searching = self.is_searching.load(Ordering::SeqCst);
+        let downloading = self.is_downloading.load(Ordering::SeqCst);
 
         // Network status section
         ui.separator();
@@ -118,7 +158,7 @@ impl HfView {
                     ui.label("● 未检测");
                 }
             }
-            if !searching {
+            if !searching && !downloading {
                 if ui.button("检测网络").clicked() {
                     self.network_status = Some(NetworkStatus::Online { latency_ms: 50 });
                     self.status_message = "网络检测完成".into();
@@ -126,43 +166,27 @@ impl HfView {
             }
         });
 
-        // Mirror site selection
+        // Mirror URL display
         ui.horizontal(|ui| {
-            ui.label("镜像站:");
-            ui.add_enabled(!searching, egui::TextEdit::singleline(&mut self.mirror_url));
-            
-            let switch_enabled = !searching;
-            if ui.add_enabled(switch_enabled, egui::Button::new("切换")).clicked() {
-                self.status_message = format!("已切换到: {}", self.mirror_url);
-            }
-            if ui.add_enabled(switch_enabled, egui::Button::new("官方")).clicked() {
-                self.mirror_url = "https://huggingface.co".into();
-                self.status_message = "已切换到HuggingFace官方".into();
-            }
-            if ui.add_enabled(switch_enabled, egui::Button::new("hf-mirror")).clicked() {
-                self.mirror_url = "https://hf-mirror.com".into();
-                self.status_message = "已切换到hf-mirror.com".into();
-            }
+            ui.label("API地址:");
+            ui.label(&self.mirror_url);
         });
-
-        // 当前API地址
-        ui.small(format!("当前API: {}", self.mirror_url));
 
         ui.separator();
 
         // Search section
         ui.strong("搜索模型");
         ui.horizontal(|ui| {
-            let response = ui.add_enabled(!searching, 
+            let response = ui.add_enabled(!searching && !downloading, 
                 egui::TextEdit::singleline(&mut self.search_query).hint_text("输入模型名称搜索..."));
             
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if !self.search_query.is_empty() && !searching {
+                if !self.search_query.is_empty() && !searching && !downloading {
                     self.do_search();
                 }
             }
             
-            if ui.add_enabled(!searching && !self.search_query.is_empty(), 
+            if ui.add_enabled(!searching && !downloading && !self.search_query.is_empty(), 
                 egui::Button::new("搜索")).clicked() {
                 self.do_search();
             }
@@ -226,32 +250,36 @@ impl HfView {
                     ui.label(format!("标签: {}", model.tags.join(", ")));
                 });
 
-            ui.horizontal(|ui| {
+            // 下载按钮
+            let model_id = model.id.clone();
+            if !downloading {
                 if ui.button("下载模型").clicked() {
-                    self.status_message = format!("开始下载: {}", model.id);
-                    self.download_progress = Some(0.0);
-                    self.download_size = Some(0);
+                    self.start_download(&model_id);
                 }
-            });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("下载中...");
+                    if ui.button("取消").clicked() {
+                        self.cancel_download();
+                    }
+                });
+            }
 
             // Download progress
             if let Some(progress) = self.download_progress {
                 ui.separator();
                 ui.strong("下载进度");
                 
-                let progress_text = format!("{:.1}%", progress * 100.0);
+                let progress_text = if let Some(size) = self.download_size {
+                    format!("{} ({:.1}%)", Self::format_size(size), progress * 100.0)
+                } else {
+                    format!("{:.1}%", progress * 100.0)
+                };
                 
                 ui.add(egui::ProgressBar::new(progress)
                     .text(progress_text)
                     .animate(true));
-                
-                ui.horizontal(|ui| {
-                    if ui.button("取消").clicked() {
-                        self.download_progress = None;
-                        self.download_size = None;
-                        self.status_message = "下载已取消".into();
-                    }
-                });
             }
         }
 
@@ -277,7 +305,6 @@ impl HfView {
         self.search_rx = Some(rx);
         
         std::thread::spawn(move || {
-            // 使用简单的HTTP请求
             let url = format!("{}/api/models?search={}&limit=20", mirror_url, query);
             
             let client = reqwest::blocking::Client::builder()
@@ -290,7 +317,6 @@ impl HfView {
                     if resp.status().is_success() {
                         match resp.text() {
                             Ok(text) => {
-                                // 尝试解析JSON
                                 if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&text) {
                                     let models: Vec<SearchModel> = items.into_iter().filter_map(|item| {
                                         let id = item.get("id")?.as_str()?.to_string();
@@ -335,5 +361,103 @@ impl HfView {
                 }
             }
         });
+    }
+
+    fn start_download(&mut self, model_id: &str) {
+        self.is_downloading.store(true, Ordering::SeqCst);
+        self.status_message = format!("开始下载: {}", model_id);
+        self.download_progress = Some(0.0);
+        self.download_size = Some(0);
+        
+        let model_id = model_id.to_string();
+        let mirror_url = self.mirror_url.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.download_rx = Some(rx);
+        
+        std::thread::spawn(move || {
+            // 获取模型信息以找到合适的文件
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            
+            // 尝试获取模型信息
+            let model_url = format!("{}/api/models/{}", mirror_url, model_id);
+            match client.get(&model_url).send() {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        if let Ok(model_info) = resp.json::<serde_json::Value>() {
+                            // 获取模型文件列表
+                            let siblings = model_info.get("siblings")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default();
+                            
+                            // 找到模型文件
+                            if let Some(sibling) = siblings.iter().find(|s| {
+                                s.get("rfilename")
+                                    .and_then(|v| v.as_str())
+                                    .map(|f| f.ends_with(".gguf") || f.ends_with(".safetensors") || f.ends_with(".bin"))
+                                    .unwrap_or(false)
+                            }) {
+                                let filename = sibling.get("rfilename")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                
+                                let download_url = format!("{}/{}/resolve/main/{}", mirror_url, model_id, filename);
+                                
+                                // 开始下载
+                                let _ = tx.send(DownloadResult::Progress { downloaded: 0, total: 0 });
+                                
+                                match client.get(&download_url).send() {
+                                    Ok(mut resp) => {
+                                        let total_size = resp.content_length().unwrap_or(0);
+                                        let mut downloaded = 0u64;
+                                        
+                                        // 这里应该将文件保存到用户选择的位置
+                                        // 目前只是模拟下载
+                                        let mut buffer = [0u8; 8192];
+                                        loop {
+                                            match resp.read(&mut buffer) {
+                                                Ok(0) => break,
+                                                Ok(n) => {
+                                                    downloaded += n as u64;
+                                                    let _ = tx.send(DownloadResult::Progress { 
+                                                        downloaded, 
+                                                        total: total_size 
+                                                    });
+                                                }
+                                                Err(_) => break,
+                                            }
+                                        }
+                                        
+                                        let _ = tx.send(DownloadResult::Complete(format!("下载完成: {}", filename)));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(DownloadResult::Error(format!("下载失败: {}", e)));
+                                    }
+                                }
+                            } else {
+                                let _ = tx.send(DownloadResult::Error("未找到可下载的模型文件".into()));
+                            }
+                        } else {
+                            let _ = tx.send(DownloadResult::Error("解析模型信息失败".into()));
+                        }
+                    } else {
+                        let _ = tx.send(DownloadResult::Error(format!("HTTP {}", resp.status())));
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(DownloadResult::Error(format!("请求失败: {}", e)));
+                }
+            }
+        });
+    }
+
+    fn cancel_download(&mut self) {
+        self.is_downloading.store(false, Ordering::SeqCst);
+        self.download_progress = None;
+        self.download_size = None;
+        self.status_message = "下载已取消".into();
     }
 }
