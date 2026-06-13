@@ -10,6 +10,7 @@ pub struct ModelView {
     presets: Vec<(String, ModelParams)>,
     preset_name: String,
     status_message: String,
+    model_supports_mtp: bool,
 }
 
 impl Default for ModelView {
@@ -28,6 +29,7 @@ impl ModelView {
             presets: Vec::new(),
             preset_name: String::new(),
             status_message: String::new(),
+            model_supports_mtp: false,
         }
     }
 
@@ -76,13 +78,21 @@ impl ModelView {
                     self.selected_path = Some(path_str);
                     self.model_info = Some(info.clone());
 
+                    // 检测模型是否支持MTP
+                    self.detect_mtp_support(&path);
+
                     // Check if model already exists in list
                     if !self.models.iter().any(|m| m.path == path) {
                         self.models.push(info);
                     }
 
                     self.status_message = if format.is_gguf() {
-                        format!("已加载GGUF模型: {}", filename)
+                        let mtp_status = if self.model_supports_mtp {
+                            " (支持MTP)"
+                        } else {
+                            ""
+                        };
+                        format!("已加载GGUF模型: {}{}", filename, mtp_status)
                     } else {
                         format!(
                             "已选择{}格式模型: {} (需要导出为GGUF)",
@@ -343,10 +353,79 @@ impl ModelView {
         });
         ui.checkbox(&mut self.params.flash_attention, "Flash Attention");
 
+        // MTP设置（仅当模型支持时可用）
+        ui.separator();
+        ui.label("MTP (Multi-Token Prediction)");
+        if self.model_supports_mtp {
+            ui.checkbox(&mut self.params.mtp_enabled, "启用 MTP");
+            if self.params.mtp_enabled {
+                ui.horizontal(|ui| {
+                    ui.label("N Predict:");
+                    ui.add(
+                        egui::Slider::new(&mut self.params.mtp_n_predict, 1..=8).show_value(true),
+                    );
+                    ui.label("(每次预测的token数)");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Vocab Size:");
+                    ui.add(
+                        egui::Slider::new(&mut self.params.mtp_n_vocab, 1000..=256000)
+                            .step_by(1000.0)
+                            .show_value(true),
+                    );
+                    ui.label("(词表大小)");
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Embedding:");
+                    ui.add(
+                        egui::Slider::new(&mut self.params.mtp_n_embd, 256..=16384)
+                            .step_by(256.0)
+                            .show_value(true),
+                    );
+                    ui.label("(嵌入维度)");
+                });
+            }
+        } else {
+            ui.horizontal(|ui| {
+                ui.add_enabled(false, egui::Checkbox::new(&mut false, "启用 MTP"));
+                ui.label("(当前模型不支持MTP)");
+            });
+        }
+
         // Status message
         if !self.status_message.is_empty() {
             ui.separator();
             ui.label(&self.status_message);
         }
+    }
+
+    /// 检测模型是否支持MTP
+    fn detect_mtp_support(&mut self, path: &std::path::Path) {
+        // 检查文件名中是否包含mtp关键字
+        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        if filename.contains("mtp") || filename.contains("multi-token") {
+            self.model_supports_mtp = true;
+            return;
+        }
+
+        // 尝试读取GGUF文件头检测MTP支持
+        if let Ok(mut file) = std::fs::File::open(path) {
+            use std::io::Read;
+            let mut header = [0u8; 64];
+            if file.read_exact(&mut header).is_ok() {
+                // 检查GGUF魔数
+                if header[0..4] == [0x47, 0x47, 0x55, 0x46] { // "GGUF"
+                    // 检查是否有mtp相关的metadata
+                    let content = String::from_utf8_lossy(&header);
+                    if content.contains("mtp") || content.contains("multi_token") {
+                        self.model_supports_mtp = true;
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 默认不支持MTP
+        self.model_supports_mtp = false;
     }
 }

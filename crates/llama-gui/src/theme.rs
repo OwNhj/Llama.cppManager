@@ -2,6 +2,7 @@ use eframe::egui::{self, Color32, Rounding, Stroke};
 
 /// 动画风格主题
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct AnimateTheme {
     /// 背景颜色
     pub background_color: Color32,
@@ -33,6 +34,7 @@ impl Default for AnimateTheme {
     }
 }
 
+#[allow(dead_code)]
 impl AnimateTheme {
     /// 深色主题
     pub fn dark() -> Self {
