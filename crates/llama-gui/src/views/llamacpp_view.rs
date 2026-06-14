@@ -636,6 +636,33 @@ impl LlamaCppView {
         None
     }
 
+    /// 从ROCm路径中提取版本号
+    fn detect_rocm_version(rocm_path: &str) -> String {
+        let path = std::path::Path::new(rocm_path);
+        
+        // 尝试从路径中提取版本号
+        if let Some(version) = path.file_name().and_then(|n| n.to_str()) {
+            // 检查是否是版本号格式
+            if version.chars().next().map(|c| c.is_numeric()).unwrap_or(false) {
+                return version.to_string();
+            }
+        }
+        
+        // 尝试从版本文件读取
+        let version_files = ["version.txt", "VERSION", "version"];
+        for file in version_files {
+            let version_path = path.join(file);
+            if let Ok(content) = std::fs::read_to_string(&version_path) {
+                if let Some(version) = content.trim().split('.').take(2).collect::<Vec<_>>().last() {
+                    return version.to_string();
+                }
+            }
+        }
+        
+        // 默认返回7.1（当前安装的版本）
+        "7.1".to_string()
+    }
+
     fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, source_path: &str, build_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
         let _ = tx.send(InstallResult::Progress(0.6));
         let _ = tx.send(InstallResult::Log(format!("源码路径: {}", source_path)));
@@ -736,16 +763,18 @@ impl LlamaCppView {
             if let Some(path) = rocm_path {
                 let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", path)));
                 
+                // 动态检测版本号
+                let version = Self::detect_rocm_version(&path);
+                let _ = tx.send(InstallResult::Log(format!("检测到HIP版本: {}", version)));
+                
                 // 设置cmake变量
-                cmd.arg("-D").arg(format!("hip_VERSION=7.1"));
-                cmd.arg("-D").arg(format!("HIP_VERSION=7.1"));
+                cmd.arg("-D").arg(format!("hip_VERSION={}", version));
+                cmd.arg("-D").arg(format!("HIP_VERSION={}", version));
                 cmd.arg("-D").arg(format!("ROCM_PATH={}", path));
                 cmd.arg("-D").arg(format!("HIP_PATH={}", path));
                 cmd.arg("-D").arg(format!("hip_DIR={}\\lib\\cmake\\hip", path));
                 cmd.arg("-D").arg(format!("hipblas_DIR={}\\lib\\cmake\\hipblas", path));
                 cmd.arg("-D").arg(format!("CMAKE_PREFIX_PATH={}\\lib\\cmake", path));
-                
-                let _ = tx.send(InstallResult::Log("已设置HIP版本: 7.1".into()));
             } else {
                 let _ = tx.send(InstallResult::Error("未找到ROCm安装路径".into()));
                 return;
