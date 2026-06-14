@@ -169,11 +169,10 @@ impl HfView {
                     ui.label("● 未检测");
                 }
             }
-            if !searching && !downloading {
-                if ui.button("检测").clicked() {
+            if !searching && !downloading
+                && ui.button("检测").clicked() {
                     self.network_status = Some(NetworkStatus::Online { latency_ms: 50 });
                 }
-            }
         });
 
         // API地址 - 可编辑
@@ -191,11 +190,10 @@ impl HfView {
             let response = ui.add_enabled(!searching && !downloading, 
                 egui::TextEdit::singleline(&mut self.search_query).hint_text("输入模型名称..."));
             
-            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                if !self.search_query.is_empty() && !searching && !downloading {
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && !self.search_query.is_empty() && !searching && !downloading {
                     self.do_search();
                 }
-            }
             
             if ui.add_enabled(!searching && !downloading && !self.search_query.is_empty(), 
                 egui::Button::new("搜索")).clicked() {

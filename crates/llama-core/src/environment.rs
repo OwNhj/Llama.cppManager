@@ -228,12 +228,12 @@ impl Environment {
         }
 
         // 检测 llama-cli
-        if let Ok(_) = std::process::Command::new("llama-cli").arg("--version").output() {
+        if std::process::Command::new("llama-cli").arg("--version").output().is_ok() {
             cli_path = Some("llama-cli".into());
         }
 
         // 检测 quantize
-        if let Ok(_) = std::process::Command::new("quantize").arg("--help").output() {
+        if std::process::Command::new("quantize").arg("--help").output().is_ok() {
             quantize_path = Some("quantize".into());
         }
 
