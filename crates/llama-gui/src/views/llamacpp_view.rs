@@ -190,6 +190,34 @@ impl LlamaCppView {
 
         ui.separator();
 
+        // 手动导入
+        ui.strong("手动导入");
+        ui.horizontal(|ui| {
+            if ui.add_enabled(!is_busy, egui::Button::new("导入已下载的源码")).clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("选择 llama.cpp 源码目录")
+                    .pick_folder()
+                {
+                    let dest = self.source_path.clone();
+                    let _ = std::fs::create_dir_all(&dest);
+                    // 复制文件
+                    if let Ok(entries) = std::fs::read_dir(&path) {
+                        for entry in entries.flatten() {
+                            let from = entry.path();
+                            let to = std::path::Path::new(&dest).join(entry.file_name());
+                            let _ = std::fs::copy(&from, &to);
+                        }
+                    }
+                    self.status_message = format!("已导入源码到: {}", dest);
+                    self.log_output.lock().unwrap().push(format!("手动导入完成: {}", dest));
+                }
+            }
+            ui.label("或手动下载后放到源码目录");
+        });
+        ui.small("如果无法下载，请从其他设备下载 llama.cpp 源码，然后使用\"导入\"功能");
+
+        ui.separator();
+
         // 操作按钮
         if is_busy {
             ui.horizontal(|ui| {
@@ -384,6 +412,19 @@ impl LlamaCppView {
         
         let _ = tx.send(InstallResult::Progress(0.2));
         let _ = tx.send(InstallResult::Log("正在下载...".into()));
+        
+        // 检测网络是否可用
+        let _ = tx.send(InstallResult::Log("检测网络连接...".into()));
+        let network_ok = std::process::Command::new("curl.exe")
+            .args(["-L", "--connect-timeout", "5", "--max-time", "10", "https://www.baidu.com", "-o", "NUL"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        
+        if !network_ok {
+            let _ = tx.send(InstallResult::Error("网络连接失败，请检查网络设置".into()));
+            return;
+        }
         
         // 多个下载源
         let download_urls = vec![
