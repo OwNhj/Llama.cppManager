@@ -741,6 +741,15 @@ impl LlamaCppView {
                 cmd.env("hipblas_DIR", format!("{}\\lib\\cmake\\hipblas", path));
                 cmd.env("hipblaslt_DIR", format!("{}\\lib\\cmake\\hipblaslt", path));
                 cmd.env("CMAKE_PREFIX_PATH", format!("{}\\lib\\cmake", path));
+                
+                // 从路径中提取版本号并设置HIP_VERSION
+                if let Some(version) = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                {
+                    cmd.env("HIP_VERSION", version);
+                    let _ = tx.send(InstallResult::Log(format!("HIP版本: {}", version)));
+                }
             } else {
                 let _ = tx.send(InstallResult::Error("未找到ROCm安装路径".into()));
                 return;
