@@ -11,7 +11,9 @@ pub struct LlamaCppView {
     is_compiling: Arc<AtomicBool>,
     download_progress: f32,
     compile_progress: f32,
+    #[allow(dead_code)]
     download_speed: f64,
+    #[allow(dead_code)]
     download_size: u64,
     status_message: String,
     log_output: Arc<Mutex<Vec<String>>>,
@@ -68,7 +70,6 @@ impl std::fmt::Display for CpuOptimization {
 enum InstallResult {
     Log(String),
     Progress(f32),
-    DownloadProgress { downloaded: u64, speed: f64 },
     Complete(String),
     Error(String),
 }
@@ -177,7 +178,6 @@ impl LlamaCppView {
             }
         });
 
-        // CPU加速选项
         ui.horizontal(|ui| {
             ui.label("CPU加速:");
             for opt in [CpuOptimization::None, CpuOptimization::Avx2, CpuOptimization::Avx512] {
@@ -214,7 +214,7 @@ impl LlamaCppView {
                     String::new()
                 };
                 ui.add(egui::ProgressBar::new(self.download_progress)
-                    .text(format!("下载: {:.0}%{}", self.download_progress * 100.0, speed_text)));
+                    .text(format!("下载: {:.0}{}", self.download_progress * 100.0, speed_text)));
             }
             if self.is_compiling.load(Ordering::SeqCst) {
                 ui.add(egui::ProgressBar::new(self.compile_progress)
@@ -260,50 +260,49 @@ impl LlamaCppView {
 
     fn check_results(&mut self) {
         if let Some(rx) = self.rx.take() {
-            while let Ok(result) = rx.try_recv() {
-                match result {
-                    InstallResult::Log(msg) => {
-                        self.log_output.lock().unwrap().push(msg);
-                    }
-                    InstallResult::Progress(p) => {
-                        if self.is_downloading.load(Ordering::SeqCst) {
-                            self.download_progress = p;
-                        } else {
-                            self.compile_progress = p;
+            match rx.try_recv() {
+                Ok(result) => {
+                    match result {
+                        InstallResult::Log(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
                         }
-                    }
-                    InstallResult::DownloadProgress { downloaded, speed } => {
-                        self.download_size = downloaded;
-                        self.download_speed = speed;
-                    }
-                    InstallResult::Complete(msg) => {
-                        self.log_output.lock().unwrap().push(msg);
-                        if self.is_downloading.load(Ordering::SeqCst) {
+                        InstallResult::Progress(p) => {
+                            if self.is_downloading.load(Ordering::SeqCst) {
+                                self.download_progress = p;
+                            } else {
+                                self.compile_progress = p;
+                            }
+                        }
+                        InstallResult::Complete(msg) => {
+                            self.log_output.lock().unwrap().push(msg);
                             self.is_downloading.store(false, Ordering::SeqCst);
-                            self.status_message = "下载完成".into();
-                        } else {
                             self.is_compiling.store(false, Ordering::SeqCst);
                             self.installed = true;
-                            self.status_message = "编译完成".into();
+                            self.status_message = "完成".into();
+                        }
+                        InstallResult::Error(e) => {
+                            self.log_output.lock().unwrap().push(format!("错误: {}", e));
+                            self.is_downloading.store(false, Ordering::SeqCst);
+                            self.is_compiling.store(false, Ordering::SeqCst);
+                            self.status_message = format!("失败: {}", e);
                         }
                     }
-                    InstallResult::Error(e) => {
-                        self.log_output.lock().unwrap().push(format!("错误: {}", e));
-                        self.is_downloading.store(false, Ordering::SeqCst);
-                        self.is_compiling.store(false, Ordering::SeqCst);
-                        self.status_message = format!("失败: {}", e);
-                    }
+                    self.rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.is_downloading.store(false, Ordering::SeqCst);
+                    self.is_compiling.store(false, Ordering::SeqCst);
                 }
             }
-            self.rx = Some(rx);
         }
     }
 
     fn start_download_only(&mut self) {
         self.is_downloading.store(true, Ordering::SeqCst);
         self.download_progress = 0.0;
-        self.download_speed = 0.0;
-        self.download_size = 0;
         self.log_output.lock().unwrap().clear();
         self.status_message = "开始下载 llama.cpp...".into();
         
@@ -337,8 +336,6 @@ impl LlamaCppView {
     fn start_full_install(&mut self) {
         self.is_downloading.store(true, Ordering::SeqCst);
         self.download_progress = 0.0;
-        self.download_speed = 0.0;
-        self.download_size = 0;
         self.log_output.lock().unwrap().clear();
         self.status_message = "开始下载并编译 llama.cpp...".into();
         
@@ -350,18 +347,14 @@ impl LlamaCppView {
         self.rx = Some(rx);
         
         std::thread::spawn(move || {
-            // 检查是否已存在完整源码
-            let cmake_file = std::path::Path::new(&source_path).join("CMakeLists.txt");
-            if cmake_file.exists() {
-                let _ = tx.send(InstallResult::Log("源码已存在，跳过下载".into()));
-                let _ = tx.send(InstallResult::Progress(1.0));
-            } else {
-                Self::do_download(&source_path, &tx);
-            }
+            // 下载
+            Self::do_download(&source_path, &tx);
             
             // 检查下载是否成功
             let cmake_file = std::path::Path::new(&source_path).join("CMakeLists.txt");
             if cmake_file.exists() {
+                let _ = tx.send(InstallResult::Log("下载完成，开始编译...".into()));
+                let _ = tx.send(InstallResult::Progress(0.5));
                 Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
             } else {
                 let _ = tx.send(InstallResult::Error("下载失败，无法开始编译".into()));
@@ -371,6 +364,7 @@ impl LlamaCppView {
 
     fn do_download(dest_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
         let _ = tx.send(InstallResult::Log(format!("下载目标: {}", dest_path)));
+        let _ = tx.send(InstallResult::Progress(0.1));
         
         // 检查是否已存在
         let cmake_file = std::path::Path::new(dest_path).join("CMakeLists.txt");
@@ -383,164 +377,128 @@ impl LlamaCppView {
         // 创建父目录
         if let Some(parent) = std::path::Path::new(dest_path).parent() {
             if !parent.exists() {
+                let _ = tx.send(InstallResult::Log(format!("创建目录: {}", parent.display())));
                 let _ = std::fs::create_dir_all(parent);
             }
         }
         
-        // 尝试使用 git
-        let git_available = std::process::Command::new("git")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok();
+        let _ = tx.send(InstallResult::Progress(0.2));
+        let _ = tx.send(InstallResult::Log("正在下载...".into()));
         
-        if git_available {
-            let _ = tx.send(InstallResult::Log("使用 git clone 下载...".into()));
-            let _ = tx.send(InstallResult::Progress(0.1));
+        // 多个下载源
+        let download_urls = vec![
+            "https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.zip",
+            "https://gitcode.com/ggerganov/llama.cpp/-/archive/master/llama.cpp-master.zip",
+        ];
+        
+        let zip_path = format!("{}.zip", dest_path);
+        let mut download_success = false;
+        
+        for url in &download_urls {
+            let _ = tx.send(InstallResult::Log(format!("尝试下载: {}", url)));
             
-            // 先删除可能存在的不完整目录
-            let _ = std::fs::remove_dir_all(dest_path);
-            
-            let output = std::process::Command::new("git")
-                .args(["clone", "--depth=1", "--progress", "https://github.com/ggerganov/llama.cpp.git", dest_path])
+            let output = std::process::Command::new("curl")
+                .args([
+                    "-L",
+                    "-o", &zip_path,
+                    "--connect-timeout", "30",
+                    "--max-time", "600",
+                    url,
+                ])
                 .output();
             
             match output {
                 Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    // git clone 的进度信息在 stderr
-                    for line in stderr.lines() {
-                        if line.contains("Receiving objects") || line.contains("Resolving deltas") {
-                            let _ = tx.send(InstallResult::Log(line.to_string()));
+                    if out.status.success() && std::path::Path::new(&zip_path).exists() {
+                        let file_size = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+                        if file_size > 1024 * 1024 {
+                            let _ = tx.send(InstallResult::Log(format!("下载成功，文件大小: {:.1} MB", file_size as f64 / 1024.0 / 1024.0)));
+                            download_success = true;
+                            break;
+                        } else {
+                            let _ = tx.send(InstallResult::Log("文件太小，尝试下一个源...".into()));
+                            let _ = std::fs::remove_file(&zip_path);
                         }
-                    }
-                    
-                    if out.status.success() {
-                        let _ = tx.send(InstallResult::Progress(1.0));
-                        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
                     } else {
-                        let _ = tx.send(InstallResult::Error(format!("git clone 失败: {}", stderr)));
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let _ = tx.send(InstallResult::Log(format!("下载失败: {}", stderr)));
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(InstallResult::Error(format!("git 执行失败: {}", e)));
-                }
-            }
-        } else {
-            // 使用 reqwest 下载 zip
-            let _ = tx.send(InstallResult::Log("git 不可用，使用 HTTP 下载...".into()));
-            let _ = tx.send(InstallResult::Progress(0.1));
-            
-            let zip_url = "https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.zip";
-            let zip_path = format!("{}.zip", dest_path);
-            
-            // 使用阻塞的 reqwest 客户端
-            let client = reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(600))
-                .build();
-            
-            match client {
-                Ok(client) => {
-                    let _ = tx.send(InstallResult::Log(format!("正在下载: {}", zip_url)));
-                    
-                    match client.get(zip_url).send() {
-                        Ok(resp) => {
-                            if !resp.status().is_success() {
-                                let _ = tx.send(InstallResult::Error(format!("HTTP {}", resp.status())));
-                                return;
-                            }
-                            
-                            let total_size = resp.content_length().unwrap_or(0);
-                            let _ = tx.send(InstallResult::Log(format!("文件大小: {:.1} MB", total_size as f64 / 1024.0 / 1024.0)));
-                            
-                            // 流式下载
-                            let mut file = match std::fs::File::create(&zip_path) {
-                                Ok(f) => f,
-                                Err(e) => {
-                                    let _ = tx.send(InstallResult::Error(format!("创建文件失败: {}", e)));
-                                    return;
-                                }
-                            };
-                            
-                            let mut downloaded: u64 = 0;
-                            let start_time = std::time::Instant::now();
-                            let mut last_update = std::time::Instant::now();
-                            
-                            let mut stream = resp;
-                            let mut buffer = [0u8; 8192];
-                            
-                            loop {
-                                use std::io::{Read, Write};
-                                match stream.read(&mut buffer) {
-                                    Ok(0) => break,
-                                    Ok(n) => {
-                                        if let Err(e) = file.write_all(&buffer[..n]) {
-                                            let _ = tx.send(InstallResult::Error(format!("写入失败: {}", e)));
-                                            return;
-                                        }
-                                        downloaded += n as u64;
-                                        
-                                        // 每100ms更新一次进度
-                                        if last_update.elapsed() >= std::time::Duration::from_millis(100) {
-                                            let progress = if total_size > 0 {
-                                                downloaded as f32 / total_size as f32
-                                            } else {
-                                                0.5
-                                            };
-                                            let speed = downloaded as f64 / start_time.elapsed().as_secs_f64();
-                                            
-                                            let _ = tx.send(InstallResult::Progress(0.1 + progress * 0.6));
-                                            let _ = tx.send(InstallResult::DownloadProgress { downloaded, speed });
-                                            
-                                            last_update = std::time::Instant::now();
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = tx.send(InstallResult::Error(format!("下载失败: {}", e)));
-                                        return;
-                                    }
-                                }
-                            }
-                            
-                            let _ = tx.send(InstallResult::Log("下载完成，正在解压...".into()));
-                            let _ = tx.send(InstallResult::Progress(0.8));
-                            
-                            // 解压
-                            let _ = std::fs::create_dir_all(dest_path);
-                            let extract_result = std::process::Command::new("tar")
-                                .args(["-xf", &zip_path, "-C", dest_path, "--strip-components=1"])
-                                .status();
-                            
-                            match extract_result {
-                                Ok(status) => {
-                                    if status.success() {
-                                        let _ = std::fs::remove_file(&zip_path);
-                                        let _ = tx.send(InstallResult::Progress(1.0));
-                                        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
-                                    } else {
-                                        let _ = tx.send(InstallResult::Error("解压失败".into()));
-                                    }
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(InstallResult::Error(format!("解压执行失败: {}", e)));
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(InstallResult::Error(format!("请求失败: {}", e)));
-                        }
-                    }
-                }
-                Err(e) => {
-                    let _ = tx.send(InstallResult::Error(format!("创建HTTP客户端失败: {}", e)));
+                    let _ = tx.send(InstallResult::Log(format!("curl执行失败: {}", e)));
                 }
             }
         }
+        
+        if !download_success {
+            let _ = tx.send(InstallResult::Log("尝试使用 git clone...".into()));
+            let git_available = std::process::Command::new("git").arg("--version").output().is_ok();
+            
+            if !git_available {
+                let _ = tx.send(InstallResult::Error("所有下载方式均失败。请检查网络连接或手动下载源码。".into()));
+                return;
+            }
+            
+            let output = std::process::Command::new("git")
+                .args(["clone", "--depth=1", "https://github.com/ggerganov/llama.cpp.git", dest_path])
+                .output();
+            
+            match output {
+                Ok(out) => {
+                    if !out.status.success() {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let _ = tx.send(InstallResult::Error(format!("所有下载方式均失败。git clone 失败: {}", stderr)));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(InstallResult::Error(format!("git执行失败: {}", e)));
+                    return;
+                }
+            }
+        }
+        
+        // 解压zip文件
+        if std::path::Path::new(&zip_path).exists() {
+            let _ = tx.send(InstallResult::Log("正在解压...".into()));
+            let _ = tx.send(InstallResult::Progress(0.4));
+            
+            let parent_path = std::path::Path::new(dest_path).parent().unwrap_or(std::path::Path::new("."));
+            let extract_output = std::process::Command::new("tar")
+                .args(["-xf", &zip_path, "-C", &parent_path.to_str().unwrap_or(".")])
+                .output();
+            
+            match extract_output {
+                Ok(out) => {
+                    if out.status.success() {
+                        let _ = std::fs::remove_file(&zip_path);
+                        let _ = tx.send(InstallResult::Log("解压完成".into()));
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let _ = tx.send(InstallResult::Error(format!("解压失败: {}", stderr)));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(InstallResult::Error(format!("解压执行失败: {}", e)));
+                    return;
+                }
+            }
+        }
+        
+        // 验证下载是否成功
+        let cmake_file = std::path::Path::new(dest_path).join("CMakeLists.txt");
+        if !cmake_file.exists() {
+            let _ = tx.send(InstallResult::Error("下载完成但找不到CMakeLists.txt".into()));
+            return;
+        }
+        
+        let _ = tx.send(InstallResult::Progress(1.0));
+        let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
     }
 
     fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, source_path: &str, build_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
-        let _ = tx.send(InstallResult::Progress(0.0));
+        let _ = tx.send(InstallResult::Progress(0.6));
         let _ = tx.send(InstallResult::Log(format!("源码路径: {}", source_path)));
         let _ = tx.send(InstallResult::Log(format!("输出路径: {}", build_path)));
         
@@ -550,46 +508,65 @@ impl LlamaCppView {
             return;
         }
         
+        // 检查CMakeLists.txt
         let cmake_file = std::path::Path::new(source_path).join("CMakeLists.txt");
         if !cmake_file.exists() {
-            let _ = tx.send(InstallResult::Error("找不到 CMakeLists.txt".into()));
+            let _ = tx.send(InstallResult::Error(format!("找不到 CMakeLists.txt: {}", cmake_file.display())));
             return;
         }
         
-        // 检查 cmake
-        if std::process::Command::new("cmake").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_err() {
-            let _ = tx.send(InstallResult::Error("cmake 未安装".into()));
+        // 检查cmake是否可用
+        if !std::process::Command::new("cmake").arg("--version").output().is_ok() {
+            let _ = tx.send(InstallResult::Error("cmake 未安装或不在 PATH 中".into()));
             return;
         }
         
-        let _ = tx.send(InstallResult::Log("配置 CMake...".into()));
-        let _ = tx.send(InstallResult::Progress(0.1));
+        let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
         let mut cmake_args: Vec<String> = vec![
-            "-B".into(), build_path.into(),
-            "-S".into(), source_path.into(),
-            "-DCMAKE_BUILD_TYPE=Release".into(),
+            "-B".into(), build_path.to_string(), 
+            "-S".into(), source_path.to_string(),
         ];
         
         match backend {
             Backend::Cpu => {
                 match cpu_opt {
-                    CpuOptimization::Avx2 => cmake_args.push("-DGGML_AVX2=ON".into()),
-                    CpuOptimization::Avx512 => cmake_args.push("-DGGML_AVX512=ON".into()),
+                    CpuOptimization::Avx2 => {
+                        cmake_args.push("-DGGML_AVX2=ON".into());
+                        let _ = tx.send(InstallResult::Log("启用 AVX2 优化".into()));
+                    }
+                    CpuOptimization::Avx512 => {
+                        cmake_args.push("-DGGML_AVX512=ON".into());
+                        let _ = tx.send(InstallResult::Log("启用 AVX-512 优化".into()));
+                    }
                     CpuOptimization::None => {}
                 }
             }
-            Backend::Cuda => cmake_args.push("-DGGML_CUDA=ON".into()),
-            Backend::Rocm => cmake_args.push("-DGGML_HIP=ON".into()),
-            Backend::Vulkan => cmake_args.push("-DGGML_VULKAN=ON".into()),
-            Backend::Metal => cmake_args.push("-DGGML_METAL=ON".into()),
+            Backend::Cuda => {
+                cmake_args.push("-DGGML_CUDA=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 CUDA 后端".into()));
+            }
+            Backend::Rocm => {
+                cmake_args.push("-DGGML_HIP=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 ROCm 后端".into()));
+            }
+            Backend::Vulkan => {
+                cmake_args.push("-DGGML_VULKAN=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 Vulkan 后端".into()));
+            }
+            Backend::Metal => {
+                cmake_args.push("-DGGML_METAL=ON".into());
+                let _ = tx.send(InstallResult::Log("启用 Metal 后端".into()));
+            }
             Backend::Openblas => {
                 cmake_args.push("-DGGML_BLAS=ON".into());
                 cmake_args.push("-DGGML_BLAS_VENDOR=OpenBLAS".into());
+                let _ = tx.send(InstallResult::Log("启用 OpenBLAS 后端".into()));
             }
         }
         
-        let _ = tx.send(InstallResult::Log(format!("cmake {}", cmake_args.join(" "))));
+        let _ = tx.send(InstallResult::Progress(0.7));
+        let _ = tx.send(InstallResult::Log(format!("执行: cmake {}", cmake_args.join(" "))));
         
         let output = std::process::Command::new("cmake")
             .args(&cmake_args)
@@ -599,49 +576,53 @@ impl LlamaCppView {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                for line in stdout.lines().take(20) {
+                
+                for line in stdout.lines() {
                     let _ = tx.send(InstallResult::Log(line.to_string()));
                 }
-                for line in stderr.lines().take(10) {
+                for line in stderr.lines() {
                     let _ = tx.send(InstallResult::Log(format!("[stderr] {}", line)));
                 }
+                
                 if !out.status.success() {
-                    let _ = tx.send(InstallResult::Error(format!("CMake 配置失败")));
+                    let _ = tx.send(InstallResult::Error(format!("cmake 配置失败: {}", stderr)));
                     return;
                 }
             }
             Err(e) => {
-                let _ = tx.send(InstallResult::Error(format!("cmake 执行失败: {}", e)));
+                let _ = tx.send(InstallResult::Error(format!("执行cmake失败: {}", e)));
                 return;
             }
         }
         
+        let _ = tx.send(InstallResult::Progress(0.8));
         let _ = tx.send(InstallResult::Log("开始编译...".into()));
-        let _ = tx.send(InstallResult::Progress(0.3));
         
         let output = std::process::Command::new("cmake")
-            .args(["--build", build_path, "--config", "Release", "-j", "8"])
+            .args(["--build", "build", "--config", "Release"])
             .output();
         
         match output {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                for line in stdout.lines().take(30) {
+                
+                for line in stdout.lines() {
                     let _ = tx.send(InstallResult::Log(line.to_string()));
                 }
-                for line in stderr.lines().take(10) {
+                for line in stderr.lines() {
                     let _ = tx.send(InstallResult::Log(format!("[stderr] {}", line)));
                 }
+                
                 if out.status.success() {
                     let _ = tx.send(InstallResult::Progress(1.0));
                     let _ = tx.send(InstallResult::Complete("编译完成!".into()));
                 } else {
-                    let _ = tx.send(InstallResult::Error("编译失败".into()));
+                    let _ = tx.send(InstallResult::Error(format!("编译失败: {}", stderr)));
                 }
             }
             Err(e) => {
-                let _ = tx.send(InstallResult::Error(format!("编译执行失败: {}", e)));
+                let _ = tx.send(InstallResult::Error(format!("执行编译失败: {}", e)));
             }
         }
     }
