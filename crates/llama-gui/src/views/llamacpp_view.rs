@@ -209,31 +209,31 @@ impl LlamaCppView {
 
         ui.separator();
 
-        // 手动导入
-        ui.strong("手动导入");
+        // 选择源码目录
+        ui.strong("选择源码目录");
         ui.horizontal(|ui| {
-            if ui.add_enabled(!is_busy, egui::Button::new("导入已下载的源码")).clicked() {
+            if ui.add_enabled(!is_busy, egui::Button::new("选择源码目录")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("选择 llama.cpp 源码目录")
                     .pick_folder()
                 {
-                    let dest = self.source_path.clone();
-                    let _ = std::fs::create_dir_all(&dest);
-                    // 复制文件
-                    if let Ok(entries) = std::fs::read_dir(&path) {
-                        for entry in entries.flatten() {
-                            let from = entry.path();
-                            let to = std::path::Path::new(&dest).join(entry.file_name());
-                            let _ = std::fs::copy(&from, &to);
-                        }
+                    // 检查是否包含CMakeLists.txt
+                    let cmake_file = path.join("CMakeLists.txt");
+                    if cmake_file.exists() {
+                        self.source_path = path.display().to_string();
+                        // 自动设置编译输出路径
+                        self.build_path = path.join("build").display().to_string();
+                        self.status_message = format!("已选择源码目录: {}", self.source_path);
+                        self.log_output.lock().unwrap().push(format!("源码目录: {}", self.source_path));
+                    } else {
+                        self.status_message = "选择的目录不包含CMakeLists.txt".into();
                     }
-                    self.status_message = format!("已导入源码到: {}", dest);
-                    self.log_output.lock().unwrap().push(format!("手动导入完成: {}", dest));
                 }
             }
-            ui.label("或手动下载后放到源码目录");
+            if !self.source_path.is_empty() {
+                ui.label(format!("当前: {}", self.source_path));
+            }
         });
-        ui.small("如果无法下载，请从其他设备下载 llama.cpp 源码，然后使用\"导入\"功能");
 
         ui.separator();
 
