@@ -767,14 +767,14 @@ impl LlamaCppView {
                 let version = Self::detect_rocm_version(&path);
                 let _ = tx.send(InstallResult::Log(format!("检测到HIP版本: {}", version)));
                 
-                // 设置cmake变量
+                // 设置cmake变量（注意：cmake变量名大小写敏感）
                 cmd.arg("-D").arg(format!("hip_VERSION={}", version));
                 cmd.arg("-D").arg(format!("HIP_VERSION={}", version));
                 cmd.arg("-D").arg(format!("ROCM_PATH={}", path));
                 cmd.arg("-D").arg(format!("HIP_PATH={}", path));
-                cmd.arg("-D").arg(format!("hip_DIR={}\\lib\\cmake\\hip", path));
-                cmd.arg("-D").arg(format!("hipblas_DIR={}\\lib\\cmake\\hipblas", path));
-                cmd.arg("-D").arg(format!("CMAKE_PREFIX_PATH={}\\lib\\cmake", path));
+                cmd.arg("-D").arg(format!("hip_DIR={}", path.replace('\\', "/")));
+                cmd.arg("-D").arg(format!("hipblas_DIR={}/lib/cmake/hipblas", path.replace('\\', "/")));
+                cmd.arg("-D").arg(format!("CMAKE_PREFIX_PATH={}/lib/cmake", path.replace('\\', "/")));
             } else {
                 let _ = tx.send(InstallResult::Error("未找到ROCm安装路径".into()));
                 return;
