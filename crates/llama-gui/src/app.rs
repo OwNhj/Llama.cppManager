@@ -63,12 +63,39 @@ impl App {
     }
 
     fn apply_settings(&self, ctx: &egui::Context, settings: &settings_view::AppSettings) {
+        // 应用主题
         let theme = match settings.theme {
             settings_view::Theme::Dark => AnimateTheme::dark(),
             settings_view::Theme::Light => AnimateTheme::light(),
-            settings_view::Theme::System => AnimateTheme::dark(),
+            settings_view::Theme::System => AnimateTheme::dark(), // 默认深色
         };
         theme.apply_to_ctx(ctx);
+        
+        // 应用字体大小
+        let mut style = (*ctx.style()).clone();
+        let mut text_styles = style.text_styles.clone();
+        text_styles.insert(
+            egui::TextStyle::Heading,
+            egui::FontId::proportional(settings.font_size + 6.0),
+        );
+        text_styles.insert(
+            egui::TextStyle::Body,
+            egui::FontId::proportional(settings.font_size),
+        );
+        text_styles.insert(
+            egui::TextStyle::Monospace,
+            egui::FontId::monospace(settings.font_size - 1.0),
+        );
+        text_styles.insert(
+            egui::TextStyle::Button,
+            egui::FontId::proportional(settings.font_size),
+        );
+        text_styles.insert(
+            egui::TextStyle::Small,
+            egui::FontId::proportional(settings.font_size - 3.0),
+        );
+        style.text_styles = text_styles;
+        ctx.set_style(style);
     }
 }
 

@@ -11,9 +11,7 @@ pub struct LlamaCppView {
     is_compiling: Arc<AtomicBool>,
     download_progress: f32,
     compile_progress: f32,
-    #[allow(dead_code)]
     download_speed: f64,
-    #[allow(dead_code)]
     download_size: u64,
     status_message: String,
     log_output: Arc<Mutex<Vec<String>>>,
@@ -23,6 +21,10 @@ pub struct LlamaCppView {
     
     source_path: String,
     build_path: String,
+    
+    // 代理设置
+    use_proxy: bool,
+    proxy_url: String,
     
     rx: Option<std::sync::mpsc::Receiver<InstallResult>>,
 }
@@ -102,6 +104,8 @@ impl LlamaCppView {
             cpu_optimization: CpuOptimization::Avx2,
             source_path: std::path::Path::new(&default_path).join("llama.cpp").display().to_string(),
             build_path: std::path::Path::new(&default_path).join("llama.cpp-build").display().to_string(),
+            use_proxy: false,
+            proxy_url: String::new(),
             rx: None,
         }
     }
@@ -187,6 +191,21 @@ impl LlamaCppView {
             }
         });
         ui.small("当有层在CPU上运行时，AVX-512 可提供更好的性能");
+
+        ui.separator();
+
+        // 代理设置
+        ui.strong("代理设置");
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.use_proxy, "使用代理");
+            if self.use_proxy {
+                ui.label("代理地址:");
+                ui.text_edit_singleline(&mut self.proxy_url);
+            }
+        });
+        if self.use_proxy {
+            ui.small("例如: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080");
+        }
 
         ui.separator();
 
@@ -335,11 +354,13 @@ impl LlamaCppView {
         self.status_message = "开始下载 llama.cpp...".into();
         
         let dest_path = self.source_path.clone();
+        let use_proxy = self.use_proxy;
+        let proxy_url = self.proxy_url.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         
         std::thread::spawn(move || {
-            Self::do_download(&dest_path, &tx);
+            Self::do_download(&dest_path, &tx, use_proxy, &proxy_url);
         });
     }
 
@@ -371,12 +392,14 @@ impl LlamaCppView {
         let cpu_opt = self.cpu_optimization.clone();
         let source_path = self.source_path.clone();
         let build_path = self.build_path.clone();
+        let use_proxy = self.use_proxy;
+        let proxy_url = self.proxy_url.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         
         std::thread::spawn(move || {
             // 下载
-            Self::do_download(&source_path, &tx);
+            Self::do_download(&source_path, &tx, use_proxy, &proxy_url);
             
             // 检查下载是否成功
             let cmake_file = std::path::Path::new(&source_path).join("CMakeLists.txt");
@@ -390,8 +413,11 @@ impl LlamaCppView {
         });
     }
 
-    fn do_download(dest_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
+    fn do_download(dest_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>, use_proxy: bool, proxy_url: &str) {
         let _ = tx.send(InstallResult::Log(format!("下载目标: {}", dest_path)));
+        if use_proxy && !proxy_url.is_empty() {
+            let _ = tx.send(InstallResult::Log(format!("使用代理: {}", proxy_url)));
+        }
         let _ = tx.send(InstallResult::Progress(0.1));
         
         // 检查是否已存在
@@ -415,16 +441,27 @@ impl LlamaCppView {
         
         // 检测网络是否可用
         let _ = tx.send(InstallResult::Log("检测网络连接...".into()));
+        let mut curl_args = vec!["-L", "--connect-timeout", "10", "--max-time", "15"];
+        if use_proxy && !proxy_url.is_empty() {
+            curl_args.push("--proxy");
+            curl_args.push(proxy_url);
+        }
+        curl_args.push("https://www.baidu.com");
+        curl_args.push("-o");
+        curl_args.push("NUL");
+        
         let network_ok = std::process::Command::new("curl.exe")
-            .args(["-L", "--connect-timeout", "5", "--max-time", "10", "https://www.baidu.com", "-o", "NUL"])
+            .args(&curl_args)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
         
         if !network_ok {
-            let _ = tx.send(InstallResult::Error("网络连接失败，请检查网络设置".into()));
+            let _ = tx.send(InstallResult::Error("网络连接失败，请检查网络设置或代理配置".into()));
             return;
         }
+        
+        let _ = tx.send(InstallResult::Log("网络连接正常".into()));
         
         // 多个下载源
         let download_urls = vec![
@@ -438,14 +475,20 @@ impl LlamaCppView {
         for url in &download_urls {
             let _ = tx.send(InstallResult::Log(format!("尝试下载: {}", url)));
             
-            let output = std::process::Command::new("curl")
-                .args([
-                    "-L",
-                    "-o", &zip_path,
-                    "--connect-timeout", "30",
-                    "--max-time", "600",
-                    url,
-                ])
+            let mut curl_args = vec![
+                "-L",
+                "-o", &zip_path,
+                "--connect-timeout", "30",
+                "--max-time", "600",
+            ];
+            if use_proxy && !proxy_url.is_empty() {
+                curl_args.push("--proxy");
+                curl_args.push(proxy_url);
+            }
+            curl_args.push(url);
+            
+            let output = std::process::Command::new("curl.exe")
+                .args(&curl_args)
                 .output();
             
             match output {
