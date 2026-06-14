@@ -481,9 +481,10 @@ impl LlamaCppView {
             let _ = tx.send(InstallResult::Log(format!("开始下载 llama.cpp 到: {}", source_path)));
             let _ = tx.send(InstallResult::Progress(0.1));
             
-            // 检查源码目录是否已存在
-            if std::path::Path::new(&source_path).exists() {
-                let _ = tx.send(InstallResult::Log("源码目录已存在，跳过下载".into()));
+            // 检查源码目录是否已存在且包含CMakeLists.txt
+            let cmake_file = std::path::Path::new(&source_path).join("CMakeLists.txt");
+            if cmake_file.exists() {
+                let _ = tx.send(InstallResult::Log("源码目录已存在且完整，跳过下载".into()));
                 let _ = tx.send(InstallResult::Progress(0.5));
                 let _ = tx.send(InstallResult::Log("开始编译...".into()));
                 Self::compile_llamacpp(&backend, &cpu_opt, &source_path, &build_path, &tx);
@@ -582,6 +583,27 @@ impl LlamaCppView {
         let _ = tx.send(InstallResult::Progress(0.6));
         let _ = tx.send(InstallResult::Log(format!("源码路径: {}", source_path)));
         let _ = tx.send(InstallResult::Log(format!("输出路径: {}", build_path)));
+        
+        // 检查源码目录是否存在
+        if !std::path::Path::new(source_path).exists() {
+            let _ = tx.send(InstallResult::Error(format!("源码目录不存在: {}", source_path)));
+            return;
+        }
+        
+        // 检查CMakeLists.txt是否存在
+        let cmake_file = std::path::Path::new(source_path).join("CMakeLists.txt");
+        if !cmake_file.exists() {
+            let _ = tx.send(InstallResult::Error(format!("找不到 CMakeLists.txt: {}", cmake_file.display())));
+            return;
+        }
+        
+        // 检查cmake是否可用
+        let cmake_available = std::process::Command::new("cmake").arg("--version").output().is_ok();
+        if !cmake_available {
+            let _ = tx.send(InstallResult::Error("cmake 未安装或不在 PATH 中".into()));
+            return;
+        }
+        
         let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
         let mut cmake_args: Vec<String> = vec![
