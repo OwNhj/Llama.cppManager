@@ -606,6 +606,21 @@ impl LlamaCppView {
             return;
         }
         
+        // 初始化git仓库（如果没有）
+        let git_dir = std::path::Path::new(source_path).join(".git");
+        if !git_dir.exists() {
+            let _ = tx.send(InstallResult::Log("初始化git仓库...".into()));
+            let _ = std::process::Command::new("git")
+                .args(["init", source_path])
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["-C", source_path, "add", "."])
+                .output();
+            let _ = std::process::Command::new("git")
+                .args(["-C", source_path, "commit", "-m", "initial", "--allow-empty"])
+                .output();
+        }
+        
         let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
         let mut cmake_args: Vec<String> = vec![
