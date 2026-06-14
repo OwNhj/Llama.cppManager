@@ -67,6 +67,7 @@ impl std::fmt::Display for CpuOptimization {
     }
 }
 
+#[allow(dead_code)]
 enum InstallResult {
     Log(String),
     Progress(f32),

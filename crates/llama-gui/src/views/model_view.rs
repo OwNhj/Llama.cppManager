@@ -11,7 +11,6 @@ pub struct ModelView {
     preset_name: String,
     status_message: String,
     model_supports_mtp: bool,
-    export_quant_type: String,
 }
 
 impl Default for ModelView {
@@ -31,7 +30,6 @@ impl ModelView {
             preset_name: String::new(),
             status_message: String::new(),
             model_supports_mtp: false,
-            export_quant_type: "Q5_K_M".into(),
         }
     }
 

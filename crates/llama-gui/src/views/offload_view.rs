@@ -8,9 +8,6 @@ pub struct OffloadView {
     model_name: Option<String>,
     af_attention_device: DeviceType,
     af_ffn_device: DeviceType,
-    // CPU加速选项
-    cpu_offload_enabled: bool,
-    cpu_use_avx512: bool,
 }
 
 impl Default for OffloadView {
@@ -27,8 +24,6 @@ impl OffloadView {
             model_name: None,
             af_attention_device: DeviceType::Cuda(0),
             af_ffn_device: DeviceType::Cpu,
-            cpu_offload_enabled: false,
-            cpu_use_avx512: true,
         }
     }
 
@@ -248,7 +243,6 @@ impl OffloadView {
                     ui.label("请先加载模型以获取层数信息");
                 }
             }
-            _ => {}
         }
 
         ui.separator();
