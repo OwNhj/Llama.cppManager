@@ -735,22 +735,17 @@ impl LlamaCppView {
             
             if let Some(path) = rocm_path {
                 let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", path)));
-                cmd.env("ROCM_PATH", &path);
-                cmd.env("HIP_PATH", &path);
-                cmd.env("hip_DIR", format!("{}\\lib\\cmake\\hip", path));
-                cmd.env("hipblas_DIR", format!("{}\\lib\\cmake\\hipblas", path));
-                cmd.env("hipblaslt_DIR", format!("{}\\lib\\cmake\\hipblaslt", path));
-                cmd.env("CMAKE_PREFIX_PATH", format!("{}\\lib\\cmake", path));
                 
-                // 从路径中提取版本号并设置HIP_VERSION
-                if let Some(version) = std::path::Path::new(&path)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                {
-                    cmd.env("HIP_VERSION", version);
-                    cmd.env("hip_VERSION", version);
-                    let _ = tx.send(InstallResult::Log(format!("HIP版本: {}", version)));
-                }
+                // 设置cmake变量
+                cmd.arg("-D").arg(format!("hip_VERSION=7.1"));
+                cmd.arg("-D").arg(format!("HIP_VERSION=7.1"));
+                cmd.arg("-D").arg(format!("ROCM_PATH={}", path));
+                cmd.arg("-D").arg(format!("HIP_PATH={}", path));
+                cmd.arg("-D").arg(format!("hip_DIR={}\\lib\\cmake\\hip", path));
+                cmd.arg("-D").arg(format!("hipblas_DIR={}\\lib\\cmake\\hipblas", path));
+                cmd.arg("-D").arg(format!("CMAKE_PREFIX_PATH={}\\lib\\cmake", path));
+                
+                let _ = tx.send(InstallResult::Log("已设置HIP版本: 7.1".into()));
             } else {
                 let _ = tx.send(InstallResult::Error("未找到ROCm安装路径".into()));
                 return;
