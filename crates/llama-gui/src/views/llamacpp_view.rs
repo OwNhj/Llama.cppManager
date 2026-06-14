@@ -748,6 +748,7 @@ impl LlamaCppView {
                     .and_then(|n| n.to_str())
                 {
                     cmd.env("HIP_VERSION", version);
+                    cmd.env("hip_VERSION", version);
                     let _ = tx.send(InstallResult::Log(format!("HIP版本: {}", version)));
                 }
             } else {
