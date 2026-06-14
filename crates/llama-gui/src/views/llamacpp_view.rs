@@ -668,9 +668,33 @@ impl LlamaCppView {
         let _ = tx.send(InstallResult::Progress(0.7));
         let _ = tx.send(InstallResult::Log(format!("执行: cmake {}", cmake_args.join(" "))));
         
-        let output = std::process::Command::new("cmake")
-            .args(&cmake_args)
-            .output();
+        // 设置ROCm环境变量
+        let mut cmd = std::process::Command::new("cmake");
+        cmd.args(&cmake_args);
+        
+        // 如果是ROCm后端，设置环境变量
+        if *backend == Backend::Rocm {
+            let _ = tx.send(InstallResult::Log("设置ROCm环境变量...".into()));
+            
+            // 尝试从Python环境获取ROCm路径
+            let rocm_paths = [
+                "C:\\Users\\10790\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_rocm_sdk_core",
+                "C:\\Program Files\\AMD\\ROCM",
+                "C:\\ROCM",
+            ];
+            
+            for path in &rocm_paths {
+                if std::path::Path::new(path).exists() {
+                    let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", path)));
+                    cmd.env("ROCM_PATH", path);
+                    cmd.env("HIP_PATH", path);
+                    cmd.env("hip_DIR", path);
+                    break;
+                }
+            }
+        }
+        
+        let output = cmd.output();
         
         match output {
             Ok(out) => {
