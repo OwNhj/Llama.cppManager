@@ -1,7 +1,7 @@
 use llama_core::huggingface::{HfClient, HfModel};
 
-#[tokio::test]
-async fn test_hf_client_creation() {
+#[test]
+fn test_hf_client_creation() {
     let client = HfClient::new("https://huggingface.co".into());
     assert_eq!(client.base_url(), "https://huggingface.co");
 }
@@ -38,8 +38,8 @@ fn test_hf_model_with_multiple_tags() {
     assert!(model.tags.contains(&"pytorch".to_string()));
 }
 
-#[tokio::test]
-async fn test_hf_client_custom_url() {
+#[test]
+fn test_hf_client_custom_url() {
     let custom_url = "https://my-huggingface-instance.example.com";
     let client = HfClient::new(custom_url.into());
     assert_eq!(client.base_url(), custom_url);

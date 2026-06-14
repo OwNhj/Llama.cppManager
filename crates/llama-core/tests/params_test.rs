@@ -114,7 +114,7 @@ fn test_validate_gpu_offload_layers() {
 #[test]
 fn test_params_meta() {
     let meta = ModelParams::meta();
-    assert_eq!(meta.len(), 8);
+    assert_eq!(meta.len(), 11);
 
     let temp_meta = meta.iter().find(|m| m.name == "temperature").unwrap();
     assert_eq!(temp_meta.min, Some(0.0));
