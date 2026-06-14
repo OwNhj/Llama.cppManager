@@ -448,9 +448,10 @@ impl LlamaCppView {
         }
         curl_args.push("https://www.baidu.com");
         curl_args.push("-o");
-        curl_args.push("NUL");
+        curl_args.push(if cfg!(target_os = "windows") { "NUL" } else { "/dev/null" });
         
-        let network_ok = std::process::Command::new("curl.exe")
+        let curl_cmd = if cfg!(target_os = "windows") { "curl.exe" } else { "curl" };
+        let network_ok = std::process::Command::new(curl_cmd)
             .args(&curl_args)
             .output()
             .map(|o| o.status.success())
@@ -487,7 +488,7 @@ impl LlamaCppView {
             }
             curl_args.push(url);
             
-            let output = std::process::Command::new("curl.exe")
+            let output = std::process::Command::new(curl_cmd)
                 .args(&curl_args)
                 .output();
             

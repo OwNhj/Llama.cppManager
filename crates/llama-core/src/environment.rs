@@ -344,7 +344,7 @@ impl Environment {
     fn detect_gpus() -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
 
-        // 方法1: 使用nvidia-smi检测NVIDIA GPU
+        // 方法1: 使用nvidia-smi检测NVIDIA GPU（跨平台）
         if let Ok(output) = std::process::Command::new("nvidia-smi")
             .args([
                 "--query-gpu=name,memory.total,memory.free,driver_version,compute_cap",
@@ -368,112 +368,101 @@ impl Environment {
             }
         }
 
-        // 方法2: 如果nvidia-smi失败，尝试使用PowerShell检测
+        // 方法2: 如果nvidia-smi失败，尝试检测AMD/Intel GPU
         if gpus.is_empty() {
-            // 使用PowerShell的ConvertTo-Json输出，更容易解析
-            let mut cmd = std::process::Command::new("powershell");
-            cmd.args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | ConvertTo-Json"]);
-            
-            // Windows下隐藏CMD窗口
             #[cfg(target_os = "windows")]
             {
+                // Windows: 使用PowerShell检测
+                let mut cmd = std::process::Command::new("powershell");
+                cmd.args(["-Command", "Get-CimInstance -ClassName Win32_VideoController | ConvertTo-Json"]);
                 use std::os::windows::process::CommandExt;
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            }
-            
-            if let Ok(output) = cmd.output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
                 
-                // 尝试解析JSON输出
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    // 可能是单个对象或数组
-                    let gpu_list = if json.is_array() {
-                        json.as_array().unwrap_or(&vec![]).clone()
-                    } else {
-                        vec![json.clone()]
-                    };
-                    
-                    // 过滤掉虚拟显示设备
-                    let skip_names = ["mirage", "sharing", "virtual", "microsoft basic"];
-                    
-                    for gpu_json in &gpu_list {
-                        let name = gpu_json.get("Name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown GPU")
-                            .to_string();
+                if let Ok(output) = cmd.output() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                        let gpu_list = if json.is_array() {
+                            json.as_array().unwrap_or(&vec![]).clone()
+                        } else {
+                            vec![json.clone()]
+                        };
                         
-                        // 跳过虚拟显示设备
-                        let name_lower = name.to_lowercase();
-                        if skip_names.iter().any(|skip| name_lower.contains(skip)) {
-                            continue;
-                        }
+                        let skip_names = ["mirage", "sharing", "virtual", "microsoft basic"];
                         
-                        if name.is_empty() || name == "Unknown GPU" {
-                            continue;
-                        }
-                        
-                        let vram_bytes = gpu_json.get("AdapterRAM")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        let mut vram_mb = vram_bytes / 1024 / 1024;
-                        
-                        // 对于AMD GPU，尝试从注册表获取准确显存
-                        if name_lower.contains("amd") || name_lower.contains("radeon") {
+                        for gpu_json in &gpu_list {
+                            let name = gpu_json.get("Name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown GPU")
+                                .to_string();
+                            
+                            let name_lower = name.to_lowercase();
+                            if skip_names.iter().any(|skip| name_lower.contains(skip)) || name.is_empty() {
+                                continue;
+                            }
+                            
+                            let vram_bytes = gpu_json.get("AdapterRAM").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let mut vram_mb = vram_bytes / 1024 / 1024;
+                            
                             if let Some(reg_vram) = Self::get_amd_gpu_vram_from_registry(&name) {
                                 vram_mb = reg_vram;
                             }
+                            
+                            let driver_version = gpu_json.get("DriverVersion")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+
+                            let (backend, compute_capability) = if name_lower.contains("nvidia") {
+                                (GpuBackend::Cuda, "Unknown".to_string())
+                            } else if name_lower.contains("amd") || name_lower.contains("radeon") || name_lower.contains("rx") || name_lower.contains("vega") {
+                                (GpuBackend::Rocm, "Unknown".to_string())
+                            } else if name_lower.contains("intel") || name_lower.contains("arc") {
+                                (GpuBackend::Intel, "Unknown".to_string())
+                            } else {
+                                (GpuBackend::Other("Unknown".into()), "Unknown".to_string())
+                            };
+
+                            gpus.push(GpuInfo {
+                                name, vram_mb, available_vram_mb: vram_mb,
+                                backend, driver_version, compute_capability,
+                            });
                         }
-                        
-                        let driver_version = gpu_json.get("DriverVersion")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown")
-                            .to_string();
-
-                        let (backend, compute_capability) = if name_lower.contains("nvidia") {
-                            (GpuBackend::Cuda, "Unknown".to_string())
-                        } else if name_lower.contains("amd") 
-                            || name_lower.contains("radeon") 
-                            || name_lower.contains("rx")
-                            || name_lower.contains("vega") {
-                            (GpuBackend::Rocm, "Unknown".to_string())
-                        } else if name_lower.contains("intel") 
-                            || name_lower.contains("arc") {
-                            (GpuBackend::Intel, "Unknown".to_string())
-                        } else {
-                            (GpuBackend::Other("Unknown".into()), "Unknown".to_string())
-                        };
-
-                        gpus.push(GpuInfo {
-                            name,
-                            vram_mb,
-                            available_vram_mb: vram_mb,
-                            backend,
-                            driver_version,
-                            compute_capability,
-                        });
                     }
                 }
             }
-        }
-
-        // 方法3: 如果还是没有检测到，尝试使用dxdiag
-        if gpus.is_empty() {
-            if let Ok(output) = std::process::Command::new("dxdiag")
-                .args(["-t", "dxdiag_output.xml"])
-                .output()
+            
+            #[cfg(target_os = "linux")]
             {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if stdout.contains("Card name") || stdout.contains("Display") {
-                    // 解析dxdiag输出
-                    gpus.push(GpuInfo {
-                        name: "检测到GPU (详细信息需要dxdiag)".into(),
-                        vram_mb: 0,
-                        available_vram_mb: 0,
-                        backend: GpuBackend::Other("Unknown".into()),
-                        driver_version: "Unknown".into(),
-                        compute_capability: "Unknown".into(),
-                    });
+                // Linux: 尝试 lspci 检测
+                if let Ok(output) = std::process::Command::new("lspci")
+                    .args(["-v", "-s", "00:02.0"])
+                    .output()
+                {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if stdout.contains("VGA") || stdout.contains("3D") {
+                        let name = stdout.lines()
+                            .find(|l| l.contains("VGA") || l.contains("3D"))
+                            .and_then(|l| l.split(": ").last())
+                            .unwrap_or("Unknown GPU")
+                            .trim()
+                            .to_string();
+                        
+                        let name_lower = name.to_lowercase();
+                        let backend = if name_lower.contains("nvidia") {
+                            GpuBackend::Cuda
+                        } else if name_lower.contains("amd") || name_lower.contains("radeon") {
+                            GpuBackend::Rocm
+                        } else if name_lower.contains("intel") {
+                            GpuBackend::Intel
+                        } else {
+                            GpuBackend::Other("Unknown".into())
+                        };
+
+                        gpus.push(GpuInfo {
+                            name, vram_mb: 0, available_vram_mb: 0,
+                            backend, driver_version: "Unknown".into(), compute_capability: "Unknown".into(),
+                        });
+                    }
                 }
             }
         }
