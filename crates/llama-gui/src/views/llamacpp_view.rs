@@ -704,6 +704,15 @@ impl LlamaCppView {
         
         let _ = tx.send(InstallResult::Log("配置编译选项...".into()));
         
+        // 确保编译输出目录存在
+        if !std::path::Path::new(build_path).exists() {
+            let _ = tx.send(InstallResult::Log(format!("创建编译目录: {}", build_path)));
+            if let Err(e) = std::fs::create_dir_all(build_path) {
+                let _ = tx.send(InstallResult::Error(format!("创建编译目录失败: {}", e)));
+                return;
+            }
+        }
+        
         let mut cmake_args: Vec<String> = vec![
             "-B".into(), build_path.to_string(), 
             "-S".into(), source_path.to_string(),
