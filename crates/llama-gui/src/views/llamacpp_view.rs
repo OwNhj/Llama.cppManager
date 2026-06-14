@@ -582,6 +582,60 @@ impl LlamaCppView {
         let _ = tx.send(InstallResult::Complete(format!("下载完成: {}", dest_path)));
     }
 
+    /// 动态检测ROCm安装路径
+    fn detect_rocm_path() -> Option<String> {
+        // 常见的ROCm安装路径
+        let common_paths = [
+            "C:\\Program Files\\AMD\\ROCM",
+            "C:\\Program Files\\ROCM",
+            "C:\\ROCM",
+            "/opt/rocm",
+            "/usr/local/rocm",
+        ];
+        
+        // 检查环境变量
+        if let Ok(path) = std::env::var("ROCM_PATH") {
+            if std::path::Path::new(&path).exists() {
+                return Some(path);
+            }
+        }
+        
+        // 检查常见路径
+        for base_path in &common_paths {
+            let base = std::path::Path::new(base_path);
+            if base.exists() {
+                // 查找最新的ROCm版本
+                if let Ok(entries) = std::fs::read_dir(base) {
+                    let mut versions: Vec<String> = entries
+                        .filter_map(|e| e.ok())
+                        .filter_map(|e| {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            if name.chars().next().map(|c| c.is_numeric()).unwrap_or(false) {
+                                Some(name)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    
+                    versions.sort_by(|a, b| b.cmp(a)); // 降序排序
+                    
+                    for version in &versions {
+                        let rocm_path = base.join(version);
+                        if rocm_path.exists() {
+                            return Some(rocm_path.display().to_string());
+                        }
+                    }
+                    
+                    // 如果没有版本子目录，直接使用基础路径
+                    return Some(base_path.to_string());
+                }
+            }
+        }
+        
+        None
+    }
+
     fn compile_llamacpp(backend: &Backend, cpu_opt: &CpuOptimization, source_path: &str, build_path: &str, tx: &std::sync::mpsc::Sender<InstallResult>) {
         let _ = tx.send(InstallResult::Progress(0.6));
         let _ = tx.send(InstallResult::Log(format!("源码路径: {}", source_path)));
@@ -676,17 +730,20 @@ impl LlamaCppView {
         if *backend == Backend::Rocm {
             let _ = tx.send(InstallResult::Log("设置ROCm环境变量...".into()));
             
-            // ROCm 7.1 安装路径
-            let rocm_path = "C:\\Program Files\\AMD\\ROCM\\7.1";
+            // 动态检测ROCm安装路径
+            let rocm_path = Self::detect_rocm_path();
             
-            if std::path::Path::new(rocm_path).exists() {
-                let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", rocm_path)));
-                cmd.env("ROCM_PATH", rocm_path);
-                cmd.env("HIP_PATH", rocm_path);
-                cmd.env("hip_DIR", format!("{}\\lib\\cmake\\hip", rocm_path));
-                cmd.env("hipblas_DIR", format!("{}\\lib\\cmake\\hipblas", rocm_path));
-                cmd.env("hipblaslt_DIR", format!("{}\\lib\\cmake\\hipblaslt", rocm_path));
-                cmd.env("CMAKE_PREFIX_PATH", format!("{}\\lib\\cmake", rocm_path));
+            if let Some(path) = rocm_path {
+                let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", path)));
+                cmd.env("ROCM_PATH", &path);
+                cmd.env("HIP_PATH", &path);
+                cmd.env("hip_DIR", format!("{}\\lib\\cmake\\hip", path));
+                cmd.env("hipblas_DIR", format!("{}\\lib\\cmake\\hipblas", path));
+                cmd.env("hipblaslt_DIR", format!("{}\\lib\\cmake\\hipblaslt", path));
+                cmd.env("CMAKE_PREFIX_PATH", format!("{}\\lib\\cmake", path));
+            } else {
+                let _ = tx.send(InstallResult::Error("未找到ROCm安装路径".into()));
+                return;
             }
         }
         
