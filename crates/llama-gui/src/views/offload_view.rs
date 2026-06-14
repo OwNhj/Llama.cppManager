@@ -253,31 +253,6 @@ impl OffloadView {
 
         ui.separator();
         self.show_vram_stats(ui);
-        
-        // CPU加速选项（当有GPU层时显示）
-        let has_gpu_layers = self.config.layers.iter().any(|l| !matches!(l.device, DeviceType::Cpu));
-        if has_gpu_layers {
-            ui.separator();
-            ui.strong("CPU 加速选项");
-            ui.label("当部分层在CPU上运行时，可选择CPU加速指令集：");
-            
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.cpu_offload_enabled, "启用CPU加速");
-            });
-            
-            if self.cpu_offload_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("指令集:");
-                    if ui.selectable_label(!self.cpu_use_avx512, "AVX2").clicked() {
-                        self.cpu_use_avx512 = false;
-                    }
-                    if ui.selectable_label(self.cpu_use_avx512, "AVX-512").clicked() {
-                        self.cpu_use_avx512 = true;
-                    }
-                });
-                ui.small("AVX-512 性能更好，但需要CPU支持");
-            }
-        }
     }
 
     fn apply_af_config(&mut self) {

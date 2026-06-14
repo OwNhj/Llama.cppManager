@@ -180,17 +180,16 @@ impl LlamaCppView {
             }
         });
 
-        if self.backend == Backend::Cpu {
-            ui.horizontal(|ui| {
-                ui.label("CPU优化:");
-                for opt in [CpuOptimization::None, CpuOptimization::Avx2, CpuOptimization::Avx512] {
-                    if ui.selectable_label(self.cpu_optimization == opt, opt.to_string()).clicked() && !is_busy {
-                        self.cpu_optimization = opt;
-                    }
+        // CPU优化选项（所有后端都可能有CPU层）
+        ui.horizontal(|ui| {
+            ui.label("CPU加速:");
+            for opt in [CpuOptimization::None, CpuOptimization::Avx2, CpuOptimization::Avx512] {
+                if ui.selectable_label(self.cpu_optimization == opt, opt.to_string()).clicked() && !is_busy {
+                    self.cpu_optimization = opt;
                 }
-            });
-            ui.small("AVX-512 包含 AVX2，选择 AVX-512 时自动启用 AVX2");
-        }
+            }
+        });
+        ui.small("当有层在CPU上运行时，AVX-512 可提供更好的性能");
 
         ui.separator();
 

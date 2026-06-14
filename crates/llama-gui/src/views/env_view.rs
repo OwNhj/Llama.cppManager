@@ -16,12 +16,10 @@ impl EnvView {
         Self { env: None }
     }
 
-    /// 启动时自动检测环境
     pub fn auto_detect(&mut self) {
         self.env = Some(Environment::detect());
     }
 
-    /// 手动刷新环境检测
     pub fn refresh(&mut self) {
         self.env = Some(Environment::detect());
     }
@@ -34,7 +32,7 @@ impl EnvView {
         }
 
         if let Some(ref env) = self.env {
-            // 运行环境信息（CUDA/ROCm/Vulkan等）
+            // 运行环境信息（基于llama.cpp）
             ui.separator();
             ui.strong("运行环境");
             self.show_runtime_env(ui, env);
@@ -86,7 +84,6 @@ impl EnvView {
             if env.gpus.is_empty() {
                 ui.label("未检测到GPU");
             } else {
-                // 去重：按名称去重
                 let mut seen_names = std::collections::HashSet::new();
                 let unique_gpus: Vec<_> = env.gpus.iter().filter(|gpu| {
                     seen_names.insert(gpu.name.clone())
@@ -104,51 +101,21 @@ impl EnvView {
                 }
             }
 
-            // llama.cpp 运行环境
+            // llama.cpp 信息
             ui.separator();
-            ui.strong("运行环境 (llama.cpp)");
+            ui.strong("llama.cpp");
             let llama = &env.llama_cpp;
             if llama.installed {
-                ui.colored_label(egui::Color32::GREEN, "● 已加载");
+                ui.colored_label(egui::Color32::GREEN, "● 已安装");
                 if let Some(ref v) = llama.version {
                     ui.label(format!("版本: {}", v));
                 }
-                
-                // 显示当前后端
-                ui.separator();
-                ui.label("当前后端:");
-                let mut backends = Vec::new();
-                if !env.gpus.is_empty() {
-                    let gpu = &env.gpus[0];
-                    match gpu.backend {
-                        llama_core::environment::GpuBackend::Cuda => backends.push("CUDA"),
-                        llama_core::environment::GpuBackend::Rocm => backends.push("ROCm"),
-                        llama_core::environment::GpuBackend::Vulkan => backends.push("Vulkan"),
-                        llama_core::environment::GpuBackend::Metal => backends.push("Metal"),
-                        _ => {}
-                    }
-                }
-                if env.cpu.features.contains(&"AVX2".to_string()) {
-                    backends.push("AVX2");
-                }
-                if env.cpu.features.contains(&"AVX-512".to_string()) {
-                    backends.push("AVX-512");
-                }
-                
-                if backends.is_empty() {
-                    ui.label("CPU (无加速)");
-                } else {
-                    ui.label(backends.join(" + "));
-                }
-                
-                // 路径信息
-                ui.separator();
                 if let Some(ref p) = llama.server_path {
-                    ui.label(format!("server: {}", p));
+                    ui.label(format!("路径: {}", p));
                 }
             } else {
-                ui.colored_label(egui::Color32::YELLOW, "● 未加载");
-                ui.label("请在 llama.cpp 标签页安装并加载");
+                ui.colored_label(egui::Color32::YELLOW, "● 未检测到");
+                ui.label("请安装 llama.cpp 或将其添加到 PATH");
             }
         } else {
             ui.separator();
@@ -157,69 +124,57 @@ impl EnvView {
     }
 
     fn show_runtime_env(&self, ui: &mut egui::Ui, env: &Environment) {
-        let runtime = &env.runtime;
-
-        // CUDA
-        ui.horizontal(|ui| {
-            ui.strong("CUDA:");
-            if let Some(ref cuda) = runtime.cuda {
-                ui.colored_label(egui::Color32::GREEN, "已安装");
-                ui.label(format!("版本: {}", cuda.version));
-                if let Some(ref cudnn) = cuda.cudnn_version {
-                    ui.label(format!("cuDNN: {}", cudnn));
+        let llama = &env.llama_cpp;
+        
+        if llama.installed {
+            ui.label("当前后端:");
+            let mut backends = Vec::new();
+            
+            // 检测GPU后端
+            if !env.gpus.is_empty() {
+                let gpu = &env.gpus[0];
+                match gpu.backend {
+                    llama_core::environment::GpuBackend::Cuda => {
+                        backends.push("CUDA".to_string());
+                        if let Some(ref cuda) = env.runtime.cuda {
+                            backends.push(format!("v{}", cuda.version));
+                        }
+                    }
+                    llama_core::environment::GpuBackend::Rocm => {
+                        backends.push("ROCm".to_string());
+                        if let Some(ref rocm) = env.runtime.rocm {
+                            backends.push(format!("v{}", rocm.version));
+                        }
+                    }
+                    llama_core::environment::GpuBackend::Vulkan => {
+                        backends.push("Vulkan".to_string());
+                        if let Some(ref vulkan) = env.runtime.vulkan {
+                            backends.push(format!("v{}", vulkan.version));
+                        }
+                    }
+                    llama_core::environment::GpuBackend::Metal => {
+                        backends.push("Metal".to_string());
+                    }
+                    _ => {}
                 }
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "未安装");
             }
-        });
-
-        // ROCm
-        ui.horizontal(|ui| {
-            ui.strong("ROCm:");
-            if let Some(ref rocm) = runtime.rocm {
-                ui.colored_label(egui::Color32::GREEN, "已安装");
-                ui.label(format!("版本: {}", rocm.version));
-                if let Some(ref hipcc) = rocm.hipcc_version {
-                    ui.label(format!("hipcc: {}", hipcc));
-                }
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "未安装");
+            
+            // 检测CPU指令集
+            if env.cpu.features.contains(&"AVX2".to_string()) {
+                backends.push("AVX2".to_string());
             }
-        });
-
-        // Vulkan
-        ui.horizontal(|ui| {
-            ui.strong("Vulkan:");
-            if let Some(ref vulkan) = runtime.vulkan {
-                ui.colored_label(egui::Color32::GREEN, "已安装");
-                ui.label(format!("版本: {}", vulkan.version));
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "未安装");
+            if env.cpu.features.contains(&"AVX-512".to_string()) {
+                backends.push("AVX-512".to_string());
             }
-        });
-
-        // Metal (macOS)
-        ui.horizontal(|ui| {
-            ui.strong("Metal:");
-            if let Some(ref metal) = runtime.metal {
-                ui.colored_label(egui::Color32::GREEN, "已支持");
-                ui.label(&metal.version);
+            
+            if backends.is_empty() {
+                ui.label("CPU (无加速)");
             } else {
-                ui.colored_label(egui::Color32::GRAY, "不支持/未检测");
+                ui.label(backends.join(" + "));
             }
-        });
-
-        // OneAPI
-        ui.horizontal(|ui| {
-            ui.strong("OneAPI:");
-            if let Some(ref oneapi) = runtime.oneapi {
-                ui.colored_label(egui::Color32::GREEN, "已安装");
-                if let Some(ref dpcpp) = oneapi.dpcpp_version {
-                    ui.label(format!("dpcpp: {}", dpcpp));
-                }
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "未安装");
-            }
-        });
+        } else {
+            ui.colored_label(egui::Color32::YELLOW, "● 未加载 llama.cpp");
+            ui.label("请在 llama.cpp 标签页安装");
+        }
     }
 }
