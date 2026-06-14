@@ -104,27 +104,51 @@ impl EnvView {
                 }
             }
 
-            // llama.cpp 信息
+            // llama.cpp 运行环境
             ui.separator();
-            ui.strong("llama.cpp");
+            ui.strong("运行环境 (llama.cpp)");
             let llama = &env.llama_cpp;
             if llama.installed {
-                ui.colored_label(egui::Color32::GREEN, "● 已安装");
+                ui.colored_label(egui::Color32::GREEN, "● 已加载");
                 if let Some(ref v) = llama.version {
                     ui.label(format!("版本: {}", v));
                 }
+                
+                // 显示当前后端
+                ui.separator();
+                ui.label("当前后端:");
+                let mut backends = Vec::new();
+                if !env.gpus.is_empty() {
+                    let gpu = &env.gpus[0];
+                    match gpu.backend {
+                        llama_core::environment::GpuBackend::Cuda => backends.push("CUDA"),
+                        llama_core::environment::GpuBackend::Rocm => backends.push("ROCm"),
+                        llama_core::environment::GpuBackend::Vulkan => backends.push("Vulkan"),
+                        llama_core::environment::GpuBackend::Metal => backends.push("Metal"),
+                        _ => {}
+                    }
+                }
+                if env.cpu.features.contains(&"AVX2".to_string()) {
+                    backends.push("AVX2");
+                }
+                if env.cpu.features.contains(&"AVX-512".to_string()) {
+                    backends.push("AVX-512");
+                }
+                
+                if backends.is_empty() {
+                    ui.label("CPU (无加速)");
+                } else {
+                    ui.label(backends.join(" + "));
+                }
+                
+                // 路径信息
+                ui.separator();
                 if let Some(ref p) = llama.server_path {
                     ui.label(format!("server: {}", p));
                 }
-                if let Some(ref p) = llama.cli_path {
-                    ui.label(format!("cli: {}", p));
-                }
-                if let Some(ref p) = llama.quantize_path {
-                    ui.label(format!("quantize: {}", p));
-                }
             } else {
-                ui.colored_label(egui::Color32::YELLOW, "● 未检测到");
-                ui.label("请安装 llama.cpp 或将其添加到 PATH");
+                ui.colored_label(egui::Color32::YELLOW, "● 未加载");
+                ui.label("请在 llama.cpp 标签页安装并加载");
             }
         } else {
             ui.separator();

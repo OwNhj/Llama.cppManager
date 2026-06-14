@@ -11,6 +11,8 @@ pub struct LlamaCppView {
     is_compiling: Arc<AtomicBool>,
     download_progress: f32,
     compile_progress: f32,
+    download_speed: f64, // bytes per second
+    download_size: u64,
     status_message: String,
     log_output: Arc<Mutex<Vec<String>>>,
     
@@ -68,6 +70,7 @@ impl std::fmt::Display for CpuOptimization {
 enum InstallResult {
     Log(String),
     Progress(f32),
+    DownloadProgress { downloaded: u64, speed: f64 },
     Complete(String),
     Error(String),
 }
@@ -92,6 +95,8 @@ impl LlamaCppView {
             is_compiling: Arc::new(AtomicBool::new(false)),
             download_progress: 0.0,
             compile_progress: 0.0,
+            download_speed: 0.0,
+            download_size: 0,
             status_message: String::new(),
             log_output: Arc::new(Mutex::new(Vec::new())),
             backend: Backend::Cpu,
@@ -201,8 +206,19 @@ impl LlamaCppView {
             });
             
             if self.is_downloading.load(Ordering::SeqCst) {
+                let speed_text = if self.download_speed > 0.0 {
+                    if self.download_speed >= 1024.0 * 1024.0 {
+                        format!(" ({:.1} MB/s)", self.download_speed / 1024.0 / 1024.0)
+                    } else if self.download_speed >= 1024.0 {
+                        format!(" ({:.1} KB/s)", self.download_speed / 1024.0)
+                    } else {
+                        format!(" ({:.0} B/s)", self.download_speed)
+                    }
+                } else {
+                    String::new()
+                };
                 ui.add(egui::ProgressBar::new(self.download_progress)
-                    .text(format!("下载: {:.0}%", self.download_progress * 100.0)));
+                    .text(format!("下载: {:.0}%{}", self.download_progress * 100.0, speed_text)));
             }
             if self.is_compiling.load(Ordering::SeqCst) {
                 ui.add(egui::ProgressBar::new(self.compile_progress)
@@ -257,6 +273,10 @@ impl LlamaCppView {
                         InstallResult::Progress(p) => {
                             self.download_progress = p;
                         }
+                        InstallResult::DownloadProgress { downloaded, speed } => {
+                            self.download_size = downloaded;
+                            self.download_speed = speed;
+                        }
                         InstallResult::Complete(msg) => {
                             self.log_output.lock().unwrap().push(msg);
                             self.is_downloading.store(false, Ordering::SeqCst);
@@ -288,6 +308,9 @@ impl LlamaCppView {
                         }
                         InstallResult::Progress(p) => {
                             self.compile_progress = p;
+                        }
+                        InstallResult::DownloadProgress { .. } => {
+                            // 编译过程中不处理下载进度
                         }
                         InstallResult::Complete(msg) => {
                             self.log_output.lock().unwrap().push(msg);

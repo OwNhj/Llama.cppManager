@@ -26,3 +26,7 @@ node_modules/
 # Temp files
 *.tmp
 *.temp
+
+# llama.cpp
+llama.cpp/
+llama.cpp-build/
