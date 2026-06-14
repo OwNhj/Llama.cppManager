@@ -676,21 +676,17 @@ impl LlamaCppView {
         if *backend == Backend::Rocm {
             let _ = tx.send(InstallResult::Log("设置ROCm环境变量...".into()));
             
-            // 尝试从Python环境获取ROCm路径
-            let rocm_paths = [
-                "C:\\Users\\10790\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_rocm_sdk_core",
-                "C:\\Program Files\\AMD\\ROCM",
-                "C:\\ROCM",
-            ];
+            // ROCm 7.1 安装路径
+            let rocm_path = "C:\\Program Files\\AMD\\ROCM\\7.1";
             
-            for path in &rocm_paths {
-                if std::path::Path::new(path).exists() {
-                    let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", path)));
-                    cmd.env("ROCM_PATH", path);
-                    cmd.env("HIP_PATH", path);
-                    cmd.env("hip_DIR", path);
-                    break;
-                }
+            if std::path::Path::new(rocm_path).exists() {
+                let _ = tx.send(InstallResult::Log(format!("使用ROCm路径: {}", rocm_path)));
+                cmd.env("ROCM_PATH", rocm_path);
+                cmd.env("HIP_PATH", rocm_path);
+                cmd.env("hip_DIR", format!("{}\\lib\\cmake\\hip", rocm_path));
+                cmd.env("hipblas_DIR", format!("{}\\lib\\cmake\\hipblas", rocm_path));
+                cmd.env("hipblaslt_DIR", format!("{}\\lib\\cmake\\hipblaslt", rocm_path));
+                cmd.env("CMAKE_PREFIX_PATH", format!("{}\\lib\\cmake", rocm_path));
             }
         }
         
